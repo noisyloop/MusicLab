@@ -27,7 +27,12 @@ export async function renderProject(project: Project, getBuffer: BufferLookup, r
     segmentStart: true,
     cutBeat: range.endBeat,
   });
-  const engine = await AudioEngine.create(ctx, getBuffer, { live: false, initialNotes: notesToEvents(events.notes, events.controls) });
+  const engine = await AudioEngine.create(ctx, getBuffer, {
+    live: false,
+    initialNotes: notesToEvents(events.notes, events.controls),
+    // Effects start at the range start, at the project tempo, exactly as live playback tells them at play.
+    initialTransport: { time: 0, beat: range.startBeat, bpm: project.tempo, beatsPerBar: project.beatsPerBar },
+  });
   engine.setProject(project);
   engine.startAudio(events.audio);
   return ctx.startRendering();

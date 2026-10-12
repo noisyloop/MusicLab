@@ -1,11 +1,14 @@
+import { getEffectDefinition } from '../devices/registry';
 import { defaultParams } from '../devices/types';
 import { subsynthDefinition } from '../devices/subsynth/definition';
 import { newId } from './ids';
 import {
+  MASTER_CHAIN,
   SCHEMA_VERSION,
   type AudioTrack,
   type Clip,
   type DeviceState,
+  type EffectSlot,
   type Id,
   type MidiTrack,
   type Project,
@@ -25,7 +28,7 @@ export function createProject(name = 'Untitled'): Project {
     tempo: 120,
     beatsPerBar: 4,
     loop: { enabled: false, start: 0, end: 16 },
-    master: { volume: 1 },
+    master: { volume: 1, effects: [] },
     tracks: [],
     assets: {},
   };
@@ -36,13 +39,25 @@ export function defaultInstrument(): DeviceState {
 }
 
 export function createTrack(kind: TrackKind, name: string, color: string): Track {
-  const base = { id: newId('t'), name, color, volume: 0.8, pan: 0, mute: false, solo: false };
+  const base = { id: newId('t'), name, color, volume: 0.8, pan: 0, mute: false, solo: false, effects: [] as EffectSlot[] };
   if (kind === 'audio') {
     const t: AudioTrack = { ...base, kind: 'audio', clips: [] };
     return t;
   }
   const t: MidiTrack = { ...base, kind: 'midi', clips: [], instrument: defaultInstrument() };
   return t;
+}
+
+/** A new effect slot with the device's default parameters, or undefined for an unknown effect type. */
+export function createEffectSlot(type: string): EffectSlot | undefined {
+  const def = getEffectDefinition(type);
+  return def ? { id: newId('fx'), type, params: defaultParams(def), bypass: false } : undefined;
+}
+
+/** The effect chain a ChainId addresses (MASTER_CHAIN or a track id). */
+export function getChain(project: Project, chain: Id): EffectSlot[] | undefined {
+  if (chain === MASTER_CHAIN) return project.master.effects;
+  return findTrack(project, chain)?.effects;
 }
 
 export function nextTrackColor(project: Project): string {

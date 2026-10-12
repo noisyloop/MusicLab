@@ -115,6 +115,16 @@ function TrackHeader({ track: t, index, selected, dragOffset, dropTarget, onGrip
             </span>
           )}
           <button
+            className="icon-btn track-duplicate"
+            title="Duplicate track (with its clips and effects)"
+            onClick={(e) => {
+              e.stopPropagation();
+              app.duplicateTrack(t.id);
+            }}
+          >
+            ⧉
+          </button>
+          <button
             className="icon-btn track-delete"
             title="Delete track"
             onClick={(e) => {

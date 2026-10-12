@@ -1,4 +1,4 @@
-import { getDeviceDefinition } from '../devices/registry';
+import { getDeviceDefinition, getEffectDefinition } from '../devices/registry';
 import { clampParam } from '../devices/types';
 import {
   SCHEMA_VERSION,
@@ -6,6 +6,7 @@ import {
   type AudioClip,
   type ControlChangePoint,
   type DeviceState,
+  type EffectSlot,
   type MidiClip,
   type Note,
   type PitchBendPoint,
@@ -81,14 +82,33 @@ function parseDevice(v: unknown, path: string): DeviceState {
   const type = str(o.type, `${path}.type`);
   const def = getDeviceDefinition(type);
   if (!def) throw new ProjectFormatError(`${path}.type: unknown device "${type}"`);
-  const raw = obj(o.params, `${path}.params`);
+  if (def.kind !== 'instrument') throw new ProjectFormatError(`${path}.type: "${type}" is not an instrument`);
+  return { type, params: parseParams(def, obj(o.params, `${path}.params`)) };
+}
+
+function parseParams(def: { params: Parameters<typeof clampParam>[0][] }, raw: Obj): Record<string, number> {
   const params: Record<string, number> = {};
   // Unknown params are dropped; missing ones get defaults, so older files keep loading.
   for (const p of def.params) {
     const val = raw[p.id];
     params[p.id] = typeof val === 'number' ? clampParam(p, val) : p.default;
   }
-  return { type, params };
+  return params;
+}
+
+function parseEffects(v: unknown, path: string): EffectSlot[] {
+  const ids = new Set<string>();
+  return arr(v, path).map((e, i) => {
+    const p = `${path}[${i}]`;
+    const o = obj(e, p);
+    const id = str(o.id, `${p}.id`);
+    if (ids.has(id)) throw new ProjectFormatError(`${p}.id: duplicate effect id "${id}"`);
+    ids.add(id);
+    const type = str(o.type, `${p}.type`);
+    const def = getEffectDefinition(type);
+    if (!def) throw new ProjectFormatError(`${p}.type: unknown effect type "${type}"`);
+    return { id, type, params: parseParams(def, obj(o.params, `${p}.params`)), bypass: bool(o.bypass, `${p}.bypass`) };
+  });
 }
 
 function parseTrack(v: unknown, path: string): Track {
@@ -102,6 +122,7 @@ function parseTrack(v: unknown, path: string): Track {
     pan: num(o.pan, `${path}.pan`, -1, 1),
     mute: bool(o.mute, `${path}.mute`),
     solo: bool(o.solo, `${path}.solo`),
+    effects: parseEffects(o.effects, `${path}.effects`),
   };
   const clips = arr(o.clips, `${path}.clips`);
   if (kind === 'audio') {
@@ -192,6 +213,13 @@ const MIGRATIONS: Record<number, (doc: Obj) => Obj> = {
         })
       : doc.tracks,
   }),
+  // 2 -> 3: every track and the master gained an (empty) insert effect chain.
+  2: (doc) => ({
+    ...doc,
+    schemaVersion: 3,
+    master: typeof doc.master === 'object' && doc.master !== null ? { ...(doc.master as Obj), effects: [] } : doc.master,
+    tracks: Array.isArray(doc.tracks) ? doc.tracks.map((t: unknown) => (typeof t === 'object' && t !== null ? { ...(t as Obj), effects: [] } : t)) : doc.tracks,
+  }),
 };
 
 /** Upgrade older documents to the current schema, one version at a time. */
@@ -232,7 +260,7 @@ export function parseProject(json: unknown): Project {
       start: num(loop.start, 'loop.start', 0),
       end: num(loop.end, 'loop.end', 0),
     },
-    master: { volume: num(master.volume, 'master.volume', 0, 2) },
+    master: { volume: num(master.volume, 'master.volume', 0, 2), effects: parseEffects(master.effects, 'master.effects') },
     tracks: arr(o.tracks, 'tracks').map((t, i) => parseTrack(t, `tracks[${i}]`)),
     assets,
   };

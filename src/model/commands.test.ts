@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
-  addAsset, addClip, addNotes, addTrack, batch, deleteClips, deleteNotes, duplicateClips, moveClips, moveTrack,
+  addAsset, addClip, addEffect, addNotes, addTrack, batch, deleteClips, deleteNotes, duplicateClips, duplicateTrack, moveClips,
+  moveEffect, moveTrack, removeEffect, setEffectBypass, setEffectParam,
   removeTrack, renameClip, renameTrack, setClipGain, setDeviceParam, setLoop, setMasterVolume, setProjectName,
   setBeatsPerBar, setInstrument, setTempo, setTrackMix, splitClips, trimClipEnd, trimClipStart, updateNotes, type Command,
 } from './commands';
 import { History } from './history';
-import { createTrack, findClip, isTrackAudible } from './project';
+import { createEffectSlot, createTrack, findClip, getChain, isTrackAudible } from './project';
 import { audioClip, fixture, midiClip, note } from './testUtil';
-import type { AudioClip, MidiClip, MidiTrack, Project } from './types';
+import { MASTER_CHAIN, type AudioClip, type EffectSlot, type MidiClip, type MidiTrack, type Project } from './types';
 
 /** Run a command through History and check that undo restores the exact original and redo the result. */
 function roundTrip(cmd: Command, start: Project = fixture()): Project {
@@ -271,5 +272,84 @@ describe('MIDI expression data follows clip edits', () => {
     expect(setInstrument('tm', 'nope').apply(fixture())).toEqual(fixture());
     expect(roundTrip(setBeatsPerBar(3)).beatsPerBar).toBe(3);
     expect(roundTrip(setBeatsPerBar(99)).beatsPerBar).toBe(32);
+  });
+});
+
+describe('effect chain commands', () => {
+  const slot = (id: string, type = 'delay', extra: Partial<EffectSlot> = {}): EffectSlot => ({ ...createEffectSlot(type)!, id, ...extra });
+  const withChain = (): Project => {
+    const p = fixture();
+    return {
+      ...p,
+      master: { ...p.master, effects: [slot('m1', 'reverb')] },
+      tracks: [{ ...p.tracks[0]!, effects: [slot('e1', 'eq3'), slot('e2', 'compressor')] }, p.tracks[1]!],
+    };
+  };
+  const ids = (p: Project, chain: string) => getChain(p, chain)!.map((e) => e.id);
+
+  it('addEffect inserts at an index or the end, on tracks and the master', () => {
+    expect(ids(roundTrip(addEffect('ta', slot('x')), withChain()), 'ta')).toEqual(['e1', 'e2', 'x']);
+    expect(ids(roundTrip(addEffect('ta', slot('x'), 1), withChain()), 'ta')).toEqual(['e1', 'x', 'e2']);
+    expect(ids(roundTrip(addEffect('ta', slot('x'), -5), withChain()), 'ta')).toEqual(['x', 'e1', 'e2']);
+    expect(ids(roundTrip(addEffect(MASTER_CHAIN, slot('x'), 0), withChain()), MASTER_CHAIN)).toEqual(['x', 'm1']);
+    expect(ids(roundTrip(addEffect('tm', slot('x'))), 'tm')).toEqual(['x']);
+    // Unknown types, duplicate ids and unknown tracks change nothing.
+    expect(addEffect('ta', { ...slot('y'), type: 'nope' }).apply(withChain())).toEqual(withChain());
+    const p = withChain();
+    expect(addEffect('ta', slot('e1')).apply(p)).toBe(p);
+    expect(addEffect('zz', slot('q')).apply(p)).toBe(p);
+  });
+
+  it('removeEffect', () => {
+    expect(ids(roundTrip(removeEffect('ta', 'e1'), withChain()), 'ta')).toEqual(['e2']);
+    expect(ids(roundTrip(removeEffect(MASTER_CHAIN, 'm1'), withChain()), MASTER_CHAIN)).toEqual([]);
+    const p = withChain();
+    expect(removeEffect('ta', 'nope').apply(p)).toBe(p);
+  });
+
+  it('moveEffect', () => {
+    const p = withChain();
+    const three = addEffect('ta', slot('e3')).apply(p);
+    expect(ids(roundTrip(moveEffect('ta', 'e1', 2), three), 'ta')).toEqual(['e2', 'e3', 'e1']);
+    expect(ids(roundTrip(moveEffect('ta', 'e3', 0), three), 'ta')).toEqual(['e3', 'e1', 'e2']);
+    expect(moveEffect('ta', 'e1', 0).apply(p)).toBe(p);
+    expect(moveEffect('ta', 'nope', 0).apply(p)).toBe(p);
+  });
+
+  it('setEffectBypass', () => {
+    const p = roundTrip(setEffectBypass('ta', 'e2', true), withChain());
+    expect(getChain(p, 'ta')![1]!.bypass).toBe(true);
+    expect(roundTrip(setEffectBypass('ta', 'e2', false), p).tracks[0]!.effects[1]!.bypass).toBe(false);
+    expect(setEffectBypass('ta', 'e1', false).apply(withChain())).toEqual(withChain());
+  });
+
+  it('setEffectParam clamps, ignores unknown params, and merges a drag into one undo step', () => {
+    const p = roundTrip(setEffectParam(MASTER_CHAIN, 'm1', 'decay', 999), withChain());
+    expect(p.master.effects[0]!.params.decay).toBe(20);
+    const start = withChain();
+    expect(setEffectParam('ta', 'e1', 'bogus', 1).apply(start)).toBe(start);
+    const h = new History(start);
+    for (const v of [-3, -6, -9]) h.execute(setEffectParam('ta', 'e1', 'midGain', v));
+    expect(h.project.tracks[0]!.effects[0]!.params.midGain).toBe(-9);
+    expect(h.undo()).toBe(true);
+    expect(h.project).toBe(start);
+    expect(h.canUndo).toBe(false);
+  });
+
+  it('duplicateTrack copies clips and the effect chain with fresh ids', () => {
+    const start = withChain();
+    const { command, newId: copyId } = duplicateTrack(start, 'ta');
+    const p = roundTrip(command, start);
+    expect(p.tracks.map((t) => t.id)).toEqual(['ta', copyId, 'tm']);
+    const copy = p.tracks[1]!;
+    expect(copy.name).toBe('Drums copy');
+    expect(copy.effects.map((e) => e.type)).toEqual(['eq3', 'compressor']);
+    expect(copy.effects.map((e) => e.params)).toEqual(start.tracks[0]!.effects.map((e) => e.params));
+    expect(copy.effects.some((e) => e.id === 'e1' || e.id === 'e2')).toBe(false);
+    expect(copy.clips.map((c) => c.start)).toEqual(start.tracks[0]!.clips.map((c) => c.start));
+    expect(copy.clips.some((c) => c.id === 'c1')).toBe(false);
+    const midi = roundTrip(duplicateTrack(start, 'tm').command, start).tracks[2] as MidiTrack;
+    expect(midi.instrument).toEqual((start.tracks[1] as MidiTrack).instrument);
+    expect(duplicateTrack(start, 'nope').newId).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import { app } from '../app/controller';
 import { useStore } from '../app/store';
 import { setMasterVolume, setTrackMix } from '../model/commands';
-import type { Track } from '../model/types';
+import { MASTER_CHAIN, type EffectSlot, type Id, type Track } from '../model/types';
 import { faderToGain, formatDb, gainToFader } from './geometry';
 import { Meter } from './Meter';
 
@@ -30,12 +30,30 @@ function panLabel(pan: number): string {
   return `${Math.round(Math.abs(pan) * 50)}${pan < 0 ? 'L' : 'R'}`;
 }
 
+/** "FX n" for a chain with active (non-bypassed) effects; opens the chain in the Device panel. */
+function FxBadge({ chain, effects }: { chain: Id; effects: EffectSlot[] }) {
+  const active = effects.filter((e) => !e.bypass).length;
+  if (active === 0) return <div className="fx-badge-space" />;
+  return (
+    <button
+      className="fx-badge"
+      data-testid="fx-badge"
+      title={`${active} active effect${active === 1 ? '' : 's'}: open in the Device panel`}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => app.openChain(chain)}
+    >
+      FX {active}
+    </button>
+  );
+}
+
 function Strip({ track, selected }: { track: Track; selected: boolean }) {
   return (
     <div className={`strip${selected ? ' selected' : ''}`} onPointerDown={() => app.selectTrack(track.id)} data-testid="mixer-strip">
       <div className="strip-name" style={{ borderTopColor: track.color }} title={track.name}>
         {track.name}
       </div>
+      <FxBadge chain={track.id} effects={track.effects} />
       <div className="pan-row">
         <input
           type="range"
@@ -72,6 +90,8 @@ function Strip({ track, selected }: { track: Track; selected: boolean }) {
 export function Mixer() {
   const tracks = useStore(app.store, (s) => s.project.tracks);
   const master = useStore(app.store, (s) => s.project.master.volume);
+  const masterEffects = useStore(app.store, (s) => s.project.master.effects);
+  const masterSelected = useStore(app.store, (s) => s.masterSelected && !s.selectedTrackId);
   const selected = useStore(app.store, (s) => s.selectedTrackId);
   return (
     <div className="mixer">
@@ -81,8 +101,9 @@ export function Mixer() {
           <Strip key={t.id} track={t} selected={t.id === selected} />
         ))}
       </div>
-      <div className="strip master" data-testid="master-strip">
+      <div className={`strip master${masterSelected ? ' selected' : ''}`} data-testid="master-strip" onPointerDown={() => app.selectMaster()} title="Select to edit the master effects in the Device panel">
         <div className="strip-name">Master</div>
+        <FxBadge chain={MASTER_CHAIN} effects={masterEffects} />
         <div className="pan-row" />
         <div className="strip-body">
           <Fader gain={master} label="Master volume" onChange={(g) => app.execute(setMasterVolume(g))} />
