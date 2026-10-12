@@ -32,8 +32,11 @@ export function installKeyboard(app: AppController): () => void {
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
 
-    if (s.exportOpen) {
-      if (e.key === 'Escape') app.setExportOpen(false);
+    if (s.exportOpen || s.midiExportOpen) {
+      if (e.key === 'Escape') {
+        app.setExportOpen(false);
+        app.setMidiExportOpen(false);
+      }
       return;
     }
 

@@ -554,4 +554,44 @@ function drawPianoRoll(ctx: CanvasRenderingContext2D, size: CanvasSize, c: MidiC
     ctx.fillRect(x - 2, height - 4 - h, 7, 2);
   }
   ctx.restore();
+  drawBendCurve(ctx, c, noteBottom, width, bx);
+}
+
+/** Read-only pitch-bend curve over the velocity lane: a step line (each point holds until the next). */
+function drawBendCurve(ctx: CanvasRenderingContext2D, c: MidiClip, laneTop: number, width: number, bx: (b: number) => number) {
+  const bends = c.bends ?? [];
+  if (bends.length === 0) return;
+  const range = Math.max(2, ...bends.map((b) => Math.abs(b.semitones)));
+  const mid = laneTop + VEL_H / 2;
+  const half = VEL_H / 2 - 6;
+  const y = (s: number) => mid - (s / range) * half;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(KEYS_W, laneTop, width - KEYS_W, VEL_H);
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(90,209,255,0.25)';
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(KEYS_W, Math.round(mid) + 0.5);
+  ctx.lineTo(width, Math.round(mid) + 0.5);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = theme.bend;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(KEYS_W, y(0));
+  let prev = 0;
+  for (const b of bends) {
+    const x = bx(b.beat);
+    ctx.lineTo(x, y(prev));
+    ctx.lineTo(x, y(b.semitones));
+    prev = b.semitones;
+  }
+  ctx.lineTo(width, y(prev));
+  ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = theme.bend;
+  ctx.font = '10px system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`Bend ±${Math.round(range * 10) / 10}`, 4, laneTop + 26);
 }

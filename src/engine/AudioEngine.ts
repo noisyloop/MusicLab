@@ -248,7 +248,7 @@ export class AudioEngine {
   private runWindow(project: Project, w: ScheduleWindow, clipIds?: ReadonlySet<Id>): void {
     const events = scheduleWindow(project, w, { clipIds });
     this.startAudio(events.audio);
-    for (const [trackId, list] of notesToEvents(events.notes)) this.channels.get(trackId)?.device?.sendEvents(list);
+    for (const [trackId, list] of notesToEvents(events.notes, events.controls)) this.channels.get(trackId)?.device?.sendEvents(list);
   }
 
   /** Create buffer sources for scheduled audio-clip segments (live and offline). */

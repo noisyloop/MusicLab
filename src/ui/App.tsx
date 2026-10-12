@@ -3,7 +3,7 @@ import { app } from '../app/controller';
 import { installKeyboard } from '../app/keyboard';
 import { PROJECT_EXTENSION } from '../persistence/projectFile';
 import { BottomPanel } from './BottomPanel';
-import { ExportDialog } from './ExportDialog';
+import { ExportDialog, MidiExportDialog } from './ExportDialog';
 import { Timeline } from './Timeline';
 import { Toasts } from './Toasts';
 import { Toolbar } from './Toolbar';
@@ -36,7 +36,7 @@ export function App() {
       const files = [...e.dataTransfer.files];
       const project = files.find((f) => f.name.toLowerCase().endsWith(PROJECT_EXTENSION));
       if (project) void app.openProjectFile(project, null);
-      else if (files.length > 0) app.toast('Drop audio files onto the arrangement timeline.', 'info');
+      else if (files.length > 0) app.toast('Drop audio or MIDI files onto the arrangement timeline.', 'info');
     };
     window.addEventListener('dragover', onDragOver);
     window.addEventListener('drop', onDrop);
@@ -59,6 +59,7 @@ export function App() {
       </main>
       <BottomPanel />
       <ExportDialog />
+      <MidiExportDialog />
       <Toasts />
     </div>
   );

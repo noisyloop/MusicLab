@@ -5,7 +5,12 @@
  *
  * Per voice: two detuned oscillators (PolyBLEP saw/square, triangle, sine)
  * -> 12 dB/oct state-variable low-pass filter with its own ADSR -> amp ADSR.
+ *
+ * Channel-wide MIDI expression: pitch bend (clamped to the Bend Range
+ * parameter) takes effect at the exact sample its event lands on, with no
+ * glide. CC 1, CC 74 and the configurable Filter CC move the filter cutoff.
  */
+import type { InstrumentCore } from '../types';
 
 const enum Stage {
   Idle,
@@ -140,21 +145,38 @@ export interface SynthParams {
   release: number;
   velSens: number;
   gain: number;
+  bendRange: number;
+  filterCc: number;
 }
 
 const DEFAULTS: SynthParams = {
   wave: 0, osc2Mix: 0.5, detune: 8, octave: 0, cutoff: 2200, resonance: 0.2, envAmount: 0.4,
   fAttack: 0.005, fDecay: 0.3, fSustain: 0.2, fRelease: 0.3,
   attack: 0.005, decay: 0.2, sustain: 0.7, release: 0.25, velSens: 0.7, gain: 0.5,
+  bendRange: 12, filterCc: 20,
 };
+
+/** Octaves of cutoff movement for a full controller sweep. */
+export const CC_FILTER_OCTAVES = 4;
+/** CC 74 ("brightness") is bipolar around this value; CC 1 and the Filter CC are unipolar from 0. */
+const CC74_CENTER = 64;
+
+function initialControllers(): Uint8Array {
+  const cc = new Uint8Array(128);
+  cc[74] = CC74_CENTER;
+  return cc;
+}
 
 export const MAX_VOICES = 16;
 const FILTER_BLOCK = 16;
 
-export class SynthCore {
+export class SynthCore implements InstrumentCore {
   private voices: Voice[] = [];
   private params: SynthParams = { ...DEFAULTS };
   private ageCounter = 0;
+  /** Current pitch bend in semitones, before clamping to bendRange. */
+  private bend = 0;
+  private cc = initialControllers();
 
   constructor(private readonly sampleRate: number, params: Record<string, number> = {}) {
     for (let i = 0; i < MAX_VOICES; i++) this.voices.push(new Voice());
@@ -223,7 +245,7 @@ export class SynthCore {
     }
   }
 
-  /** Release all voices. With `hard`, fade them out within ~5 ms instead. */
+  /** Release all voices. With `hard`, fade them out within ~5 ms and reset controllers. */
   allNotesOff(hard = false): void {
     for (const v of this.voices) {
       v.gate = false;
@@ -231,6 +253,32 @@ export class SynthCore {
       v.fenv.gateOff();
       if (hard && v.active) v.fadeStep = 1 / (0.005 * this.sampleRate);
     }
+    if (hard) {
+      this.bend = 0;
+      this.cc = initialControllers();
+    }
+  }
+
+  pitchBend(semitones: number): void {
+    if (Number.isFinite(semitones)) this.bend = semitones;
+  }
+
+  controlChange(controller: number, value: number): void {
+    if (controller >= 0 && controller < 128) this.cc[controller] = Math.min(127, Math.max(0, Math.round(value)));
+  }
+
+  /** Effective bend in semitones (clamped to the Bend Range parameter). */
+  get bendSemitones(): number {
+    const range = Math.max(0, this.params.bendRange);
+    return Math.min(range, Math.max(-range, this.bend));
+  }
+
+  /** Cutoff offset in octaves from CC 1, CC 74 and the Filter CC. */
+  get controllerCutoffOctaves(): number {
+    const fcc = Math.round(this.params.filterCc);
+    let oct = (this.cc[1]! / 127) * CC_FILTER_OCTAVES + ((this.cc[74]! - CC74_CENTER) / CC74_CENTER) * CC_FILTER_OCTAVES;
+    if (fcc !== 1 && fcc !== 74 && fcc >= 0 && fcc < 128) oct += (this.cc[fcc]! / 127) * CC_FILTER_OCTAVES;
+    return oct;
   }
 
   /** Add the synth output to outL/outR in the frame range [from, to). */
@@ -241,7 +289,10 @@ export class SynthCore {
     const k = 2 - 1.96 * Math.min(1, Math.max(0, p.resonance));
     const wave = Math.round(p.wave);
     const detuneRatio = Math.pow(2, p.detune / 1200 / 2);
-    const octaveMul = Math.pow(2, Math.round(p.octave));
+    // Bend is constant between events, and the host splits rendering at every
+    // event's exact frame, so this applies the bend per sample with no glide.
+    const octaveMul = Math.pow(2, Math.round(p.octave) + this.bendSemitones / 12);
+    const cutoff = p.cutoff * Math.pow(2, this.controllerCutoffOctaves);
     const level = p.gain * 0.35;
     for (const v of this.voices) {
       if (!v.active) continue;
@@ -256,7 +307,7 @@ export class SynthCore {
       for (let i = from; i < to; i++) {
         if ((i - from) % FILTER_BLOCK === 0) {
           const fe = v.fenv.level;
-          const fc = Math.min(nyq, Math.max(20, p.cutoff * Math.pow(2, p.envAmount * 7 * fe)));
+          const fc = Math.min(nyq, Math.max(20, cutoff * Math.pow(2, p.envAmount * 7 * fe)));
           g = Math.tan((Math.PI * fc) / sr);
           a1 = 1 / (1 + g * (g + k));
           a2 = g * a1;

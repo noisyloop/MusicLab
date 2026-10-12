@@ -8,7 +8,7 @@
  * and History records nothing.
  */
 import { getDeviceDefinition } from '../devices/registry';
-import { clampParam } from '../devices/types';
+import { clampParam, defaultParams } from '../devices/types';
 import { newId } from './ids';
 import { findClip } from './project';
 import { clampTempo, secondsPerBeat } from './time';
@@ -101,6 +101,14 @@ export function setTempo(tempo: number): Command {
     label: 'Change tempo',
     mergeKey: 'tempo',
     apply: (p) => (p.tempo === t ? p : { ...p, tempo: t }),
+  };
+}
+
+export function setBeatsPerBar(beatsPerBar: number): Command {
+  const b = clamp(Math.round(beatsPerBar), 1, 32);
+  return {
+    label: 'Change time signature',
+    apply: (p) => (p.beatsPerBar === b ? p : { ...p, beatsPerBar: b }),
   };
 }
 
@@ -219,6 +227,19 @@ export function setDeviceParam(trackId: Id, paramId: string, value: number): Com
         const v = clampParam(desc, value);
         if (t.instrument.params[paramId] === v) return t;
         return { ...t, instrument: { ...t.instrument, params: { ...t.instrument.params, [paramId]: v } } };
+      }),
+  };
+}
+
+/** Swap a MIDI track's instrument for a fresh instance of another device type. */
+export function setInstrument(trackId: Id, type: string): Command {
+  return {
+    label: 'Change instrument',
+    apply: (p) =>
+      mapTrack(p, trackId, (t) => {
+        const def = getDeviceDefinition(type);
+        if (t.kind !== 'midi' || !def || t.instrument.type === type) return t;
+        return { ...t, instrument: { type, params: defaultParams(def) } };
       }),
   };
 }

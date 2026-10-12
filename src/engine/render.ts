@@ -27,7 +27,7 @@ export async function renderProject(project: Project, getBuffer: BufferLookup, r
     segmentStart: true,
     cutBeat: range.endBeat,
   });
-  const engine = await AudioEngine.create(ctx, getBuffer, { live: false, initialNotes: notesToEvents(events.notes) });
+  const engine = await AudioEngine.create(ctx, getBuffer, { live: false, initialNotes: notesToEvents(events.notes, events.controls) });
   engine.setProject(project);
   engine.startAudio(events.audio);
   return ctx.startRendering();

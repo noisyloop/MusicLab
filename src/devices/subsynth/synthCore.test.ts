@@ -70,4 +70,66 @@ describe('SynthCore', () => {
     };
     expect(hf(200)).toBeLessThan(hf(8000) * 0.5);
   });
+
+  /** Estimated frequency from upward zero crossings of a pure sine voice. */
+  const freqOf = (core: SynthCore, frames = SR) => {
+    const x = renderFrames(core, frames);
+    let crossings = 0;
+    for (let i = 2400; i < x.length; i++) if (x[i - 1]! <= 0 && x[i]! > 0) crossings++;
+    return crossings / ((x.length - 2400) / SR);
+  };
+  const sine = (extra: Record<string, number> = {}) =>
+    new SynthCore(SR, { ...defaultParams(subsynthDefinition), wave: 3, osc2Mix: 0, detune: 0, cutoff: 18000, envAmount: 0, sustain: 1, ...extra });
+
+  it('applies pitch bend, clamped to the bend range', () => {
+    const a = sine();
+    a.noteOn(69, 1);
+    expect(freqOf(a)).toBeCloseTo(440, -1);
+    const b = sine();
+    b.pitchBend(12);
+    b.noteOn(69, 1);
+    expect(freqOf(b)).toBeCloseTo(880, -1);
+    const c = sine({ bendRange: 2 });
+    c.pitchBend(12); // clamped to +2
+    c.noteOn(69, 1);
+    expect(freqOf(c)).toBeCloseTo(440 * Math.pow(2, 2 / 12), -1);
+    expect(c.bendSemitones).toBe(2);
+  });
+
+  it('bends sounding notes immediately (no glide) and hard reset clears the bend', () => {
+    const core = sine();
+    core.noteOn(69, 1);
+    renderFrames(core, 4800);
+    core.pitchBend(-12);
+    expect(freqOf(core, 9600)).toBeCloseTo(220, -1);
+    core.allNotesOff(true);
+    expect(core.bendSemitones).toBe(0);
+  });
+
+  it('maps CC 1, CC 74 and the Filter CC to cutoff', () => {
+    const core = new SynthCore(SR, defaultParams(subsynthDefinition));
+    expect(core.controllerCutoffOctaves).toBe(0);
+    core.controlChange(1, 127);
+    expect(core.controllerCutoffOctaves).toBeCloseTo(4);
+    core.controlChange(74, 0);
+    expect(core.controllerCutoffOctaves).toBeCloseTo(0);
+    core.controlChange(20, 127); // default Filter CC
+    expect(core.controllerCutoffOctaves).toBeCloseTo(4);
+    core.setParams({ filterCc: 21 });
+    expect(core.controllerCutoffOctaves).toBeCloseTo(0);
+    core.controlChange(7, 127); // unmapped controller
+    expect(core.controllerCutoffOctaves).toBeCloseTo(0);
+
+    const hf = (cc: number) => {
+      const s = new SynthCore(SR, { ...defaultParams(subsynthDefinition), cutoff: 300, envAmount: 0 });
+      s.controlChange(74, cc);
+      s.noteOn(48, 1);
+      const x = renderFrames(s, 9600);
+      let e = 0;
+      for (let i = 1; i < x.length; i++) e += (x[i]! - x[i - 1]!) ** 2;
+      return e;
+    };
+    expect(hf(127)).toBeGreaterThan(hf(64) * 2);
+  });
 });
+

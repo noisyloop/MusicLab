@@ -6,7 +6,7 @@
  * happens inside the audio engine (see time.ts helpers it uses).
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type Id = string;
 
@@ -100,6 +100,13 @@ export interface MidiClip extends ClipBase {
   /** Beat inside the clip's note content that lines up with `start`. */
   contentOffset: number;
   notes: Note[];
+  /**
+   * Pitch-bend curve (schema 2+), sorted by beat. Each point holds until the
+   * next one. Beats are in the same content coordinates as notes.
+   */
+  bends?: PitchBendPoint[];
+  /** Controller changes (schema 2+), sorted by beat, content coordinates. */
+  ccs?: ControlChangePoint[];
 }
 
 export type Clip = AudioClip | MidiClip;
@@ -114,6 +121,22 @@ export interface Note {
   length: number;
   /** 0..1. */
   velocity: number;
+}
+
+export interface PitchBendPoint {
+  /** Beats, relative to the clip content origin. */
+  beat: number;
+  /** Bend amount in semitones (the musical intent; instruments clamp to their own range). */
+  semitones: number;
+}
+
+export interface ControlChangePoint {
+  /** Beats, relative to the clip content origin. */
+  beat: number;
+  /** MIDI controller number 0..127. */
+  controller: number;
+  /** MIDI controller value 0..127. */
+  value: number;
 }
 
 export interface DeviceState {

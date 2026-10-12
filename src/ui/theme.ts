@@ -19,6 +19,7 @@ export const theme = {
   drop: 'rgba(120,200,255,0.25)',
   text: '#e8e9ec',
   textDim: '#8b9099',
+  bend: '#5ad1ff',
 };
 
 /** Mix a #rrggbb color toward black (amount < 0) or white (amount > 0). */

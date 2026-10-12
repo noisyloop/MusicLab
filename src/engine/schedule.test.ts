@@ -146,3 +146,60 @@ describe('notesToEvents', () => {
     expect(ev.get('t')!.map((e) => `${e.type}@${e.time}`)).toEqual(['noteOn@1', 'noteOff@2', 'noteOn@2', 'noteOff@3']);
   });
 });
+
+describe('scheduleWindow: pitch bend and controllers', () => {
+  // MIDI clip at beat 4 (0.5 s/beat), content offset 1: visible content [1, 5).
+  const withExpression = (): Project => {
+    const p = fixture();
+    const m = p.tracks[1] as MidiTrack;
+    const clip = midiClip('m1', 4, 4, [note('n1', 60, 1, 1)], {
+      contentOffset: 1,
+      bends: [
+        { beat: 0.5, semitones: 2 }, // hidden, but sets the state at the clip start
+        { beat: 2, semitones: -1 },
+        { beat: 6, semitones: 5 }, // beyond the visible content
+      ],
+      ccs: [
+        { beat: 0, controller: 74, value: 10 },
+        { beat: 3, controller: 1, value: 99 },
+      ],
+    });
+    return { ...p, tracks: [p.tracks[0]!, { ...m, clips: [clip] }] };
+  };
+  const sig = (c: { kind: string; time: number; chase: boolean } & Record<string, unknown>) =>
+    `${c.kind}${c.chase ? '*' : ''}@${c.time}=${c.kind === 'bend' ? c.semitones : `${c.controller}:${c.value}`}`;
+
+  it('chases state at the clip start and plays visible points in time', () => {
+    const ev = scheduleWindow(withExpression(), win(4, 8));
+    expect(ev.controls.map(sig)).toEqual(['bend*@100=2', 'cc*@100=74:10', 'bend@100.5=-1', 'cc@101=1:99']);
+  });
+
+  it('chases mid-clip at a segment start, and not otherwise', () => {
+    expect(scheduleWindow(withExpression(), win(6, 7, { segmentStart: true })).controls.map(sig)).toEqual(['bend*@100=-1', 'cc*@100=74:10', 'cc@100=1:99']);
+    expect(scheduleWindow(withExpression(), win(6, 7)).controls.map(sig)).toEqual(['cc@100=1:99']);
+  });
+
+  it('resets bend to 0 at the start of clips without earlier bends on tracks that use bends', () => {
+    const p = withExpression();
+    const m = p.tracks[1] as MidiTrack;
+    const plain = midiClip('m2', 10, 2, [note('n9', 62, 0, 1)]);
+    const q: Project = { ...p, tracks: [p.tracks[0]!, { ...m, clips: [...m.clips, plain] }] };
+    expect(scheduleWindow(q, win(10, 11)).controls.map(sig)).toEqual(['bend*@100=0']);
+    // A track without bends gets no bend events at all.
+    expect(scheduleWindow(fixture(), win(4, 8)).controls).toEqual([]);
+  });
+
+  it('turns controls into device events ordered note-off, controllers, note-on', () => {
+    const ev = notesToEvents(
+      [
+        { trackId: 't', clipId: 'c', pitch: 60, velocity: 1, on: 1, off: 2 },
+        { trackId: 't', clipId: 'c', pitch: 62, velocity: 1, on: 2, off: 3 },
+      ],
+      [
+        { trackId: 't', clipId: 'c', time: 2, chase: true, kind: 'bend', semitones: 0 },
+        { trackId: 't', clipId: 'c', time: 2, chase: false, kind: 'cc', controller: 1, value: 5 },
+      ],
+    );
+    expect(ev.get('t')!.map((e) => `${e.type}@${e.time}`)).toEqual(['noteOn@1', 'noteOff@2', 'pitchBend@2', 'cc@2', 'noteOn@2', 'noteOff@3']);
+  });
+});
