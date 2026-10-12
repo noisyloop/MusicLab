@@ -4,6 +4,7 @@
  * that window starts, compute which audio clip segments and notes to start.
  * This is the only place where beats become seconds for playback.
  */
+import type { NoteEvent } from '../devices/types';
 import type { AudioClip, Id, LoopRegion, Project } from '../model/types';
 import { secondsPerBeat } from '../model/time';
 
@@ -153,4 +154,18 @@ export function beatAtTime(anchors: readonly TimeAnchor[], time: number, tempo: 
     else break;
   }
   return a.beat + Math.max(0, time - a.time) / secondsPerBeat(tempo);
+}
+
+/** Group scheduled notes into per-track device events. */
+export function notesToEvents(notes: readonly NoteStart[]): Map<Id, NoteEvent[]> {
+  const out = new Map<Id, NoteEvent[]>();
+  for (const n of notes) {
+    let list = out.get(n.trackId);
+    if (!list) out.set(n.trackId, (list = []));
+    list.push({ type: 'noteOn', time: n.on, pitch: n.pitch, velocity: n.velocity });
+    list.push({ type: 'noteOff', time: n.off, pitch: n.pitch });
+  }
+  // Note-offs sort before note-ons at the same instant so repeated notes retrigger.
+  for (const list of out.values()) list.sort((a, b) => a.time - b.time || (a.type === 'noteOff' ? -1 : 1));
+  return out;
 }

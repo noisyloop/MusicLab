@@ -5,8 +5,8 @@
  */
 import { secondsPerBeat } from '../model/time';
 import type { Project } from '../model/types';
-import { AudioEngine, notesToEvents, type BufferLookup } from './AudioEngine';
-import { scheduleWindow } from './schedule';
+import { AudioEngine, type BufferLookup } from './AudioEngine';
+import { notesToEvents, scheduleWindow } from './schedule';
 
 export interface RenderRange {
   startBeat: number;

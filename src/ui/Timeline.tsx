@@ -89,9 +89,11 @@ export function Timeline() {
         const loop = project.loop;
         const lx0 = beatToX(loop.start, v);
         const lx1 = beatToX(loop.end, v);
+        // With the loop on: edges resize, inside moves, outside draws a new region.
+        // With it off, any drag draws a new region; a click inside toggles it.
         let mode: 'create' | 'move' | 'start' | 'end' = 'create';
-        if (Math.abs(x - lx0) <= 5) mode = 'start';
-        else if (Math.abs(x - lx1) <= 5) mode = 'end';
+        if (loop.enabled && Math.abs(x - lx0) <= 5) mode = 'start';
+        else if (loop.enabled && Math.abs(x - lx1) <= 5) mode = 'end';
         else if (x > lx0 && x < lx1) mode = 'move';
         drag.current = { kind: 'loop', mode, startBeat: beat, x, moved: false, command: null };
       } else {
@@ -182,7 +184,7 @@ export function Timeline() {
         const loop = project.loop;
         const b = snap(beat, e.altKey);
         const g = grid() || 1 / 16;
-        if (d.mode === 'create') {
+        if (d.mode === 'create' || (d.mode === 'move' && !loop.enabled)) {
           const a = snap(d.startBeat, e.altKey);
           const [s, en] = a < b ? [a, b] : [b, a];
           d.command = setLoop({ enabled: true, start: s, end: Math.max(en, s + g) });
@@ -266,7 +268,8 @@ export function Timeline() {
       if (y < LOOP_STRIP) {
         const lx0 = beatToX(app.project.loop.start, v);
         const lx1 = beatToX(app.project.loop.end, v);
-        cursor = Math.abs(x - lx0) <= 5 || Math.abs(x - lx1) <= 5 ? 'ew-resize' : x > lx0 && x < lx1 ? 'grab' : 'crosshair';
+        const on = app.project.loop.enabled;
+        cursor = on && (Math.abs(x - lx0) <= 5 || Math.abs(x - lx1) <= 5) ? 'ew-resize' : on && x > lx0 && x < lx1 ? 'grab' : 'crosshair';
       } else cursor = 'text';
     } else {
       const hit = hitTestClip(app.project, x, y, v, layout);

@@ -104,6 +104,7 @@ function ProjectName() {
       <input
         className="project-name-input"
         autoFocus
+        onFocus={(e) => e.currentTarget.select()}
         defaultValue={name}
         onBlur={(e) => {
           setEditing(false);

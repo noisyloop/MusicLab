@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fixture, midiClip, note } from '../model/testUtil';
 import type { MidiTrack, Project } from '../model/types';
-import { beatAtTime, planWindows, scheduleWindow, type ScheduleWindow } from './schedule';
+import { beatAtTime, notesToEvents, planWindows, scheduleWindow, type ScheduleWindow } from './schedule';
 
 // fixture @120bpm (0.5 s/beat): audio c1 [0,4), c2 [8,12) offset 1s; midi m1 [4,8) notes n1@0 len1, n2@2 len1. asset 10s.
 const win = (fromBeat: number, toBeat: number, extra: Partial<ScheduleWindow> = {}): ScheduleWindow => ({
@@ -132,5 +132,17 @@ describe('beatAtTime', () => {
     expect(beatAtTime(anchors, 12.5, 120)).toBe(1);
     expect(beatAtTime(anchors, 9, 120)).toBe(4);
     expect(beatAtTime([], 9, 120)).toBe(0);
+  });
+});
+
+describe('notesToEvents', () => {
+  it('groups by track and orders note-off before note-on at the same time', () => {
+    const ev = notesToEvents([
+      { trackId: 't', clipId: 'c', pitch: 60, velocity: 1, on: 1, off: 2 },
+      { trackId: 't', clipId: 'c', pitch: 60, velocity: 0.5, on: 2, off: 3 },
+      { trackId: 'u', clipId: 'd', pitch: 40, velocity: 1, on: 0, off: 1 },
+    ]);
+    expect(ev.get('u')).toHaveLength(2);
+    expect(ev.get('t')!.map((e) => `${e.type}@${e.time}`)).toEqual(['noteOn@1', 'noteOff@2', 'noteOn@2', 'noteOff@3']);
   });
 });

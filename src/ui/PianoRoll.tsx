@@ -58,6 +58,7 @@ function PianoRollEditor({ clipId }: { clipId: Id }) {
   const drag = useRef<Drag | null>(null);
   const view = useRef<PRView>({ pxPerBeat: 60, scrollBeat: (clip?.contentOffset ?? 0) - 0.25, keyH: 12, topPitch: 84 });
   const hoverRef = useRef<{ x: number; y: number } | null>(null);
+  const needsCenter = useRef(true);
 
   const getClip = () => findClip(app.project, clipId)?.clip as MidiClip | undefined;
   const trackId = () => findClip(app.project, clipId)?.track.id;
@@ -66,6 +67,14 @@ function PianoRollEditor({ clipId }: { clipId: Id }) {
     (ctx: CanvasRenderingContext2D, size: CanvasSize) => {
       const c = getClip();
       if (!c) return;
+      if (needsCenter.current && size.height > 0) {
+        // Center the view on the clip's notes (or around C4 for an empty clip).
+        needsCenter.current = false;
+        const pitches = c.notes.map((n) => n.pitch);
+        const mid = pitches.length ? (Math.min(...pitches) + Math.max(...pitches)) / 2 : 60;
+        const visible = (size.height - VEL_H - RULER_H) / view.current.keyH;
+        view.current.topPitch = Math.min(127, Math.round(mid + visible / 2));
+      }
       const d = drag.current;
       const shown = d && 'command' in d && d.command ? (findClip(d.command.apply(app.project), clipId)?.clip as MidiClip | undefined) : c;
       drawPianoRoll(ctx, size, shown ?? c, view.current, selection.current, d, gridRef.current);

@@ -100,6 +100,7 @@ function TrackHeader({ track: t, index, selected, dragOffset, dropTarget, onGrip
             <input
               className="track-name-input"
               autoFocus
+              onFocus={(e) => e.currentTarget.select()}
               defaultValue={t.name}
               onBlur={(e) => commitName(e.currentTarget.value)}
               onKeyDown={(e) => {

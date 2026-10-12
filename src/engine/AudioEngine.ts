@@ -13,10 +13,10 @@ import { secondsPerBeat } from '../model/time';
 import type { Clip, Id, Project, Track } from '../model/types';
 import {
   beatAtTime,
+  notesToEvents,
   planWindows,
   scheduleWindow,
   type AudioStart,
-  type NoteStart,
   type ScheduleWindow,
   type TimeAnchor,
   type TransportCursor,
@@ -66,19 +66,6 @@ export interface EngineOptions {
   initialNotes?: Map<Id, NoteEvent[]>;
   /** Live engines run a scheduler timer; offline engines don't. */
   live: boolean;
-}
-
-export function notesToEvents(notes: readonly NoteStart[]): Map<Id, NoteEvent[]> {
-  const out = new Map<Id, NoteEvent[]>();
-  for (const n of notes) {
-    let list = out.get(n.trackId);
-    if (!list) out.set(n.trackId, (list = []));
-    list.push({ type: 'noteOn', time: n.on, pitch: n.pitch, velocity: n.velocity });
-    list.push({ type: 'noteOff', time: n.off, pitch: n.pitch });
-  }
-  // Note-offs sort before note-ons at the same instant so repeated notes retrigger.
-  for (const list of out.values()) list.sort((a, b) => a.time - b.time || (a.type === 'noteOff' ? -1 : 1));
-  return out;
 }
 
 export class AudioEngine {

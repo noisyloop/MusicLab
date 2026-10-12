@@ -12,7 +12,7 @@
   --solo: #4a90e2;
   --danger: #e55353;
   --header-w: 220px;
-  --bottom-h: 300px;
+  --bottom-h: 330px;
   color-scheme: dark;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 12px;
@@ -312,6 +312,16 @@ input[type='range'] {
   flex-direction: column;
   min-height: 0;
   background: var(--panel-2);
+  position: relative;
+}
+.panel-resizer {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  z-index: 5;
 }
 .tabs {
   display: flex;
