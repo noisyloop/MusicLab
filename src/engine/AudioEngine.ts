@@ -3,11 +3,12 @@
  * sound. It owns every Web Audio node; the UI only talks to it through this
  * class's methods (via the app controller).
  *
- * Graph per track:
- *   sources/instrument -> input -> volume -> pan -> mute/solo -> meter split
- *                                                      \-> master -> destination
+ * Graph per track (inserts are pre-fader):
+ *   sources/instrument -> input -> effect chain -> volume -> pan -> mute/solo -> meter split
+ *                                                                     \-> master input
+ * Master: master input -> master effect chain -> master volume -> meter split + destination
  */
-import type { NoteEvent } from '../devices/types';
+import type { NoteEvent, TransportEvent } from '../devices/types';
 import { isTrackAudible } from '../model/project';
 import { secondsPerBeat } from '../model/time';
 import type { Clip, Id, Project, Track } from '../model/types';
@@ -21,6 +22,7 @@ import {
   type TimeAnchor,
   type TransportCursor,
 } from './schedule';
+import { EffectChain } from './effectChain';
 import { loadDeviceModules, WorkletDevice } from './workletDevice';
 
 export type BufferLookup = (assetId: Id) => AudioBuffer | undefined;
@@ -31,6 +33,8 @@ export type StereoLevel = [number, number];
 export interface MeterSnapshot {
   master: StereoLevel;
   tracks: Record<Id, StereoLevel>;
+  /** Effect meter values by slot id (compressor: gain reduction in dB). */
+  effects: Record<Id, number>;
 }
 
 interface Meter {
@@ -42,6 +46,7 @@ interface Meter {
 interface Channel {
   track: Track;
   input: GainNode;
+  chain: EffectChain;
   volume: GainNode;
   pan: StereoPannerNode;
   gate: GainNode;
@@ -64,6 +69,8 @@ const RAMP_S = 0.012;
 export interface EngineOptions {
   /** Note events known up front, by track id (offline rendering). */
   initialNotes?: Map<Id, NoteEvent[]>;
+  /** Transport (tempo/position) for effects at context time 0 (offline rendering). */
+  initialTransport?: TransportEvent;
   /** Live engines run a scheduler timer; offline engines don't. */
   live: boolean;
 }
@@ -72,8 +79,12 @@ export class AudioEngine {
   readonly ctx: BaseAudioContext;
   private readonly getBuffer: BufferLookup;
   private readonly options: EngineOptions;
+  private readonly masterIn: GainNode;
   private readonly master: GainNode;
+  private masterChain: EffectChain | null = null;
   private readonly masterMeter: Meter;
+  /** Latest tempo/position sent to effects; new effects start from it. */
+  private transport: TransportEvent;
   private readonly channels = new Map<Id, Channel>();
   private readonly active = new Set<ActiveSource>();
   private project: Project | null = null;
@@ -88,10 +99,21 @@ export class AudioEngine {
     this.ctx = ctx;
     this.getBuffer = getBuffer;
     this.options = options;
+    this.transport = options.initialTransport ?? { time: 0, beat: 0, bpm: 120, beatsPerBar: 4 };
+    this.masterIn = ctx.createGain();
     this.master = ctx.createGain();
     this.masterMeter = this.createMeter();
     this.master.connect(this.masterMeter.split);
     this.master.connect(ctx.destination);
+  }
+
+  private readonly currentTransport = (): TransportEvent[] => [this.transport];
+
+  /** Tell every effect the tempo and where the song is at `time`. */
+  private broadcastTransport(t: TransportEvent): void {
+    this.transport = t;
+    this.masterChain?.sendTransport(t);
+    for (const ch of this.channels.values()) ch.chain.sendTransport(t);
   }
 
   static async create(ctx: BaseAudioContext, getBuffer: BufferLookup, options: EngineOptions): Promise<AudioEngine> {
@@ -123,6 +145,14 @@ export class AudioEngine {
     this.project = project;
     if (prev === project) return;
     this.setParam(this.master.gain, project.master.volume);
+    if (!prev && !this.options.initialTransport) this.transport = { ...this.transport, bpm: project.tempo, beatsPerBar: project.beatsPerBar };
+    if (!this.masterChain) {
+      this.masterChain = new EffectChain(this.ctx, this.options.live, project.master.effects, this.currentTransport);
+      this.masterIn.connect(this.masterChain.input);
+      this.masterChain.output.connect(this.master);
+    } else {
+      this.masterChain.update(project.master.effects);
+    }
 
     const live = new Set(project.tracks.map((t) => t.id));
     for (const [id, ch] of this.channels) {
@@ -137,10 +167,15 @@ export class AudioEngine {
       this.updateChannel(ch, track, project);
     }
 
+    if (prev && (prev.tempo !== project.tempo || prev.beatsPerBar !== project.beatsPerBar) && !(this.playing && prev.tempo !== project.tempo)) {
+      // Synced effects follow the new tempo / bar length from now on.
+      const now = this.ctx.currentTime;
+      this.broadcastTransport({ time: now, beat: this.playing ? beatAtTime(this.anchors, now, prev.tempo) : this.cursor.beat, bpm: project.tempo, beatsPerBar: project.beatsPerBar });
+    }
     if (this.playing && prev) {
       if (prev.tempo !== project.tempo) {
         // Everything already scheduled is at the wrong time: restart in place.
-        this.play(this.positionBeats());
+        this.play(beatAtTime(this.anchors, this.ctx.currentTime, prev.tempo));
         return;
       }
       this.resyncChangedClips(prev, project);
@@ -154,12 +189,14 @@ export class AudioEngine {
     const pan = ctx.createStereoPanner();
     const gate = ctx.createGain();
     const meter = this.createMeter();
-    input.connect(volume).connect(pan).connect(gate);
+    const chain = new EffectChain(ctx, this.options.live, track.effects, this.currentTransport);
+    input.connect(chain.input);
+    chain.output.connect(volume).connect(pan).connect(gate);
     gate.connect(meter.split);
-    gate.connect(this.master);
-    const ch: Channel = { track, input, volume, pan, gate, meter };
+    gate.connect(this.masterIn);
+    const ch: Channel = { track, input, chain, volume, pan, gate, meter };
     if (track.kind === 'midi') {
-      ch.device = new WorkletDevice(ctx, track.instrument.type, track.instrument.params, this.options.initialNotes?.get(track.id) ?? []);
+      ch.device = new WorkletDevice(ctx, track.instrument.type, track.instrument.params, { initialEvents: this.options.initialNotes?.get(track.id) ?? [] });
       ch.device.node.connect(input);
     }
     volume.gain.value = track.volume;
@@ -170,6 +207,7 @@ export class AudioEngine {
 
   private updateChannel(ch: Channel, track: Track, project: Project): void {
     ch.track = track;
+    ch.chain.update(track.effects);
     this.setParam(ch.volume.gain, track.volume);
     this.setParam(ch.pan.pan, track.pan);
     this.setParam(ch.gate.gain, isTrackAudible(project, track) ? 1 : 0);
@@ -187,6 +225,7 @@ export class AudioEngine {
   private disposeChannel(id: Id, ch: Channel): void {
     for (const a of this.active) if (a.trackId === id) this.stopSource(a, this.ctx.currentTime);
     ch.device?.dispose();
+    ch.chain.dispose();
     ch.gate.disconnect();
     ch.input.disconnect();
     this.channels.delete(id);
@@ -212,6 +251,7 @@ export class AudioEngine {
     const t0 = this.ctx.currentTime + START_LATENCY_S;
     this.cursor = { beat: Math.max(0, fromBeat), time: t0, segmentStart: true };
     this.anchors = [{ time: t0, beat: this.cursor.beat }];
+    this.broadcastTransport({ time: t0, beat: this.cursor.beat, bpm: this.project.tempo, beatsPerBar: this.project.beatsPerBar });
     this.playing = true;
     this.tick();
     if (this.options.live && this.timer === null) this.timer = setInterval(() => this.tick(), TICK_MS);
@@ -240,6 +280,7 @@ export class AudioEngine {
     const plan = planWindows(this.cursor, now + LOOKAHEAD_S, project.tempo, project.loop);
     this.cursor = plan.cursor;
     this.anchors.push(...plan.jumps);
+    for (const j of plan.jumps) this.broadcastTransport({ time: j.time, beat: j.beat, bpm: project.tempo, beatsPerBar: project.beatsPerBar });
     // Keep only the anchor in effect now plus future ones.
     while (this.anchors.length > 1 && this.anchors[1]!.time <= now) this.anchors.shift();
     for (const w of plan.windows) this.runWindow(project, w);
@@ -374,12 +415,17 @@ export class AudioEngine {
   meters(): MeterSnapshot {
     const tracks: Record<Id, StereoLevel> = {};
     for (const [id, ch] of this.channels) tracks[id] = this.readMeter(ch.meter);
-    return { master: this.readMeter(this.masterMeter), tracks };
+    const effects: Record<Id, number> = {};
+    this.masterChain?.collectMeters(effects);
+    for (const ch of this.channels.values()) ch.chain.collectMeters(effects);
+    return { master: this.readMeter(this.masterMeter), tracks, effects };
   }
 
   dispose(): void {
     this.stop();
     for (const [id, ch] of this.channels) this.disposeChannel(id, ch);
+    this.masterChain?.dispose();
+    this.masterIn.disconnect();
     this.master.disconnect();
   }
 }

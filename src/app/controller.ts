@@ -5,14 +5,15 @@
  */
 import { AudioEngine, type MeterSnapshot } from '../engine/AudioEngine';
 import { renderProject } from '../engine/render';
+import { exportTailSeconds } from '../engine/tails';
 import {
-  addAsset, addClip, addTrack, batch, deleteClips, duplicateClips, setLoop, splitClips, type Command,
+  addAsset, addClip, addTrack, batch, deleteClips, duplicateClips, duplicateTrack, setLoop, splitClips, type Command,
 } from '../model/commands';
 import { History } from '../model/history';
 import { newId } from '../model/ids';
 import { createProject, createTrack, findClip, findTrack, nextTrackColor, nextTrackName, projectEndBeat, TRACK_COLORS } from '../model/project';
 import { secondsToBeats, snapBeat } from '../model/time';
-import type { AudioAsset, AudioClip, Clip, Id, MidiClip, Project, Track } from '../model/types';
+import { MASTER_CHAIN, type AudioAsset, type AudioClip, type Clip, type Id, type MidiClip, type Project, type Track } from '../model/types';
 import { PROJECT_EXTENSION, PROJECT_MIME, readProjectFile, writeProjectFile } from '../persistence/projectFile';
 import { exportMidiFile } from '../midi/export';
 import { planMidiImport, readMidiFile } from '../midi/import';
@@ -52,6 +53,8 @@ export interface AppState {
   fileName: string | null;
   selectedClipIds: Id[];
   selectedTrackId: Id | null;
+  /** The master strip is selected (the Device panel shows the master chain). */
+  masterSelected: boolean;
   view: ViewState;
   playing: boolean;
   editorClipId: Id | null;
@@ -107,7 +110,7 @@ export class AppController {
   /** Transport position in beats; updated every animation frame while playing. */
   readonly position = new Store<{ beat: number }>({ beat: 0 });
   /** Latest meter levels; updated every animation frame. */
-  readonly meters = new Store<{ snapshot: MeterSnapshot }>({ snapshot: { master: [0, 0], tracks: {} } });
+  readonly meters = new Store<{ snapshot: MeterSnapshot }>({ snapshot: { master: [0, 0], tracks: {}, effects: {} } });
   readonly assets = new AssetStore();
 
   private history: History;
@@ -132,6 +135,7 @@ export class AppController {
       fileName: null,
       selectedClipIds: [],
       selectedTrackId: null,
+      masterSelected: false,
       view: { pxPerBeat: 24, scrollBeat: 0, scrollY: 0, snap: 0, followPlayhead: true },
       playing: false,
       editorClipId: null,
@@ -234,7 +238,18 @@ export class AppController {
   }
 
   selectTrack(id: Id | null): void {
-    this.store.set({ selectedTrackId: id });
+    this.store.set({ selectedTrackId: id, masterSelected: false });
+  }
+
+  selectMaster(): void {
+    this.store.set({ selectedTrackId: null, masterSelected: true });
+  }
+
+  /** Show a chain (a track id or MASTER_CHAIN) in the Device panel. */
+  openChain(chain: Id): void {
+    if (chain === MASTER_CHAIN) this.selectMaster();
+    else this.selectTrack(chain);
+    this.setBottomPanel('device');
   }
 
   setFocus(focus: FocusArea): void {
@@ -358,6 +373,11 @@ export class AppController {
     const idx = sel ? p.tracks.findIndex((t) => t.id === sel) + 1 : undefined;
     this.execute(addTrack(track, idx));
     this.store.set({ selectedTrackId: track.id });
+  }
+
+  duplicateTrack(trackId: Id): void {
+    const { command, newId } = duplicateTrack(this.project, trackId);
+    if (newId && this.execute(command)) this.selectTrack(newId);
   }
 
   /** Create an empty one-bar MIDI clip at `beat` on a MIDI track, and open it. */
@@ -703,7 +723,8 @@ export class AppController {
     }
     this.store.set({ busy: 'Rendering mix…', exportOpen: false });
     try {
-      const rendered = await renderProject(project, (id) => this.assets.get(id)?.buffer, { startBeat, endBeat, tailSeconds: 2 }, sampleRate);
+      const tailSeconds = exportTailSeconds(project);
+      const rendered = await renderProject(project, (id) => this.assets.get(id)?.buffer, { startBeat, endBeat, tailSeconds }, sampleRate);
       const channels = [rendered.getChannelData(0), rendered.getChannelData(1)];
       const wav = encodeWav(channels, rendered.sampleRate, format);
       const safeName = (project.name.trim() || 'Untitled').replace(/[\\/:*?"<>|]/g, '_');

@@ -3,14 +3,35 @@
  * device processor and speaks the DeviceMessage protocol to it.
  */
 import { getDeviceDefinition, listDeviceDefinitions } from '../devices/registry';
-import type { DeviceDefinition, DeviceMessage, DeviceProcessorOptions, NoteEvent } from '../devices/types';
+import type { DeviceDefinition, DeviceMessage, DeviceProcessorOptions, DeviceReply, NoteEvent, TransportEvent } from '../devices/types';
 import drumkitProcessorUrl from '../devices/drumkit/processor.ts?worker&url';
+import compressorProcessorUrl from '../devices/effects/compressor/processor.ts?worker&url';
+import delayProcessorUrl from '../devices/effects/delay/processor.ts?worker&url';
+import eq3ProcessorUrl from '../devices/effects/eq3/processor.ts?worker&url';
+import filterProcessorUrl from '../devices/effects/filter/processor.ts?worker&url';
+import reverbProcessorUrl from '../devices/effects/reverb/processor.ts?worker&url';
+import saturatorProcessorUrl from '../devices/effects/saturator/processor.ts?worker&url';
 import subsynthProcessorUrl from '../devices/subsynth/processor.ts?worker&url';
 
 const processorUrls: Record<string, string> = {
   subsynth: subsynthProcessorUrl,
   drumkit: drumkitProcessorUrl,
+  eq3: eq3ProcessorUrl,
+  compressor: compressorProcessorUrl,
+  saturator: saturatorProcessorUrl,
+  filter: filterProcessorUrl,
+  delay: delayProcessorUrl,
+  reverb: reverbProcessorUrl,
 };
+
+export interface WorkletDeviceOptions {
+  /** Instruments: events known up front (offline rendering). */
+  initialEvents?: NoteEvent[];
+  /** Effects: start bypassed (no crossfade). */
+  bypass?: boolean;
+  /** Effects: transport updates known up front. */
+  transport?: TransportEvent[];
+}
 
 const loaded = new WeakMap<BaseAudioContext, Promise<void>>();
 
@@ -34,19 +55,28 @@ export class WorkletDevice {
   readonly node: AudioWorkletNode;
   readonly definition: DeviceDefinition;
   private params: Record<string, number>;
+  private bypass: boolean;
+  /** Latest meter value the processor reported (effects with a meter). */
+  meterValue = 0;
 
-  constructor(ctx: BaseAudioContext, type: string, params: Record<string, number>, initialEvents: NoteEvent[] = []) {
+  constructor(ctx: BaseAudioContext, type: string, params: Record<string, number>, options: WorkletDeviceOptions = {}) {
     const def = getDeviceDefinition(type);
     if (!def) throw new Error(`Unknown device type "${type}"`);
     this.definition = def;
     this.params = { ...params };
-    const processorOptions: DeviceProcessorOptions = { params: this.params, events: initialEvents };
+    this.bypass = options.bypass ?? false;
+    const processorOptions: DeviceProcessorOptions = { params: this.params, events: options.initialEvents ?? [], bypass: this.bypass, transport: options.transport ?? [] };
     this.node = new AudioWorkletNode(ctx, def.processorName, {
       numberOfInputs: def.numberOfInputs,
       numberOfOutputs: 1,
       outputChannelCount: [def.outputChannelCount],
+      // Effects always see stereo: mono sources are up-mixed to both channels.
+      ...(def.numberOfInputs > 0 ? { channelCount: 2, channelCountMode: 'explicit' as const, channelInterpretation: 'speakers' as const } : {}),
       processorOptions,
     });
+    this.node.port.onmessage = (ev: MessageEvent<DeviceReply>) => {
+      if (ev.data?.type === 'meter') this.meterValue = ev.data.value;
+    };
   }
 
   private post(msg: DeviceMessage): void {
@@ -73,6 +103,18 @@ export class WorkletDevice {
 
   reset(): void {
     this.post({ type: 'reset' });
+  }
+
+  /** Effects: crossfade into or out of bypass. */
+  setBypass(bypass: boolean): void {
+    if (bypass === this.bypass) return;
+    this.bypass = bypass;
+    this.post({ type: 'bypass', bypass });
+  }
+
+  /** Effects: tempo/position update. */
+  sendTransport(transport: TransportEvent): void {
+    this.post({ type: 'transport', transport });
   }
 
   dispose(): void {

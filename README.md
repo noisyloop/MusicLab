@@ -19,7 +19,28 @@ are saved to your own disk as a single `.musiclab` file.
   tracks), trim either edge, split at playhead, duplicate, delete, nudge with
   the arrow keys. Every edit can be undone and redone.
 - Mixer: per-track volume, pan, mute, solo, and stereo peak meters, plus master
-  volume and meter.
+  volume and meter. Strips with active effects show an **FX n** badge. Click
+  it to open that chain. Click the master strip to edit the master chain.
+- Insert effects: every audio and MIDI track, and the master, has an ordered,
+  pre-fader chain of effects. In the Device panel the chain runs left to right:
+  - the instrument comes first on MIDI tracks;
+  - each effect is a card with its controls, a bypass button (⏻), and ×;
+  - drag a card's header to reorder it;
+  - **+** adds an effect.
+
+  Every change can be undone, and edits during playback don't stop the audio
+  or click. The effects are:
+  - **EQ3**: low cut, low shelf, mid peak, and high shelf.
+  - **Compressor**: soft knee, with a live gain-reduction meter on its card.
+  - **Saturator**: soft clip, tanh, or wavefold, 2× oversampled.
+  - **Filter**: low-pass, high-pass, or band-pass, with an optional
+    tempo-synced LFO.
+  - **Delay**: tempo-synced or free time, ping-pong, and filtered feedback.
+  - **Reverb**: algorithmic, with decay, pre-delay, damping, and width.
+
+  Delay and reverb tails keep ringing after clips end and after you stop. WAV
+  export lengthens its tail to fit them, up to 10 s.
+- Track header: ⧉ duplicates a track along with its clips and effects.
 - MIDI: piano roll (draw, move, resize, delete notes, edit velocity, transpose,
   read-only pitch-bend curve), plus two built-in instruments running in
   AudioWorklets, with their parameters in the Device panel:
@@ -129,7 +150,7 @@ Opening `index.html` straight from `file://` will not work.
 A `.musiclab` file is a zip archive:
 
 ```
-project.json                   # the project model (has "schemaVersion", currently 2)
+project.json                   # the project model (has "schemaVersion", currently 3)
 audio/<assetId>/<fileName>     # each original audio file, byte-for-byte
 ```
 
@@ -137,7 +158,9 @@ audio/<assetId>/<fileName>     # each original audio file, byte-for-byte
 MIDI clips can carry optional `bends` (`{ beat, semitones }`) and `ccs`
 (`{ beat, controller, value }`) lists next to their notes. These use the
 same clip-content beats as notes, so trimming and splitting treat them the
-same way (added in schema 2).
+same way (added in schema 2). Every track and `master` has an `effects` array
+of `{ id, type, params, bypass }` slots in signal order (added in schema 3).
+Unknown effect types are rejected with a message naming the slot.
 Opening a file validates it fully (`src/model/validate.ts`). A file written by
 a newer schema version is refused with a clear message, and older versions
 pass through `migrate()`.
@@ -147,7 +170,7 @@ pass through `migrate()`.
 ```
 src/model/        plain-data project model, commands (every edit), undo history, validation
 src/engine/       Web Audio engine: scheduler math, AudioEngine (live + offline), WorkletDevice host
-src/devices/      Device interface, shared worklet processor host, SubSynth and DrumKit (descriptors + DSP cores)
+src/devices/      Device interface, shared worklet processor hosts, SubSynth and DrumKit, effects/ (six insert effects)
 src/midi/         Standard MIDI File parser/writer (smf.ts), SMF -> model import, project -> SMF export
 src/persistence/  .musiclab read/write (fflate)
 src/app/          controller (intents, file IO, engine lifecycle), stores, keyboard
@@ -160,7 +183,14 @@ src/util/         WAV encoder, waveform peaks
   to the next. `History` keeps before/after snapshots, so undo and redo cover
   everything. Continuous gestures (faders, knobs) merge into one undo step.
 - **Engine.** `AudioEngine.setProject()` diffs the model into native nodes
-  (GainNode, StereoPannerNode, AudioBufferSourceNode, AnalyserNode). A
+  (GainNode, StereoPannerNode, AudioBufferSourceNode, AnalyserNode). Each
+  channel is input → effect chain → volume → pan → mute/solo gate. The master
+  is master input → master chain → master volume → meter and output.
+  `EffectChain` (`src/engine/effectChain.ts`) diffs each chain:
+  - a parameter change only posts a `params` message;
+  - bypass is a 10 ms crossfade inside the effect's processor;
+  - adding, removing, or reordering effects rewires only that chain, behind a
+    5 ms fade-out and 5 ms fade-in. A
   lookahead scheduler runs every 25 ms with a 120 ms horizon and calls the
   pure `scheduleWindow()` (`src/engine/schedule.ts`), the only place beats
   become seconds. Edits during playback stop and re-chase only the affected
@@ -174,9 +204,17 @@ src/util/         WAV encoder, waveform peaks
   and `reset`. Events known in advance (offline render) arrive through
   `processorOptions`. Both instruments share one processor host
   (`src/devices/processorHost.ts`). It applies each event at its exact sample
-  frame and drives a pure-TypeScript `InstrumentCore`. A future plugin format
-  can be adapted by writing a definition and a wrapper processor that speaks
-  this protocol.
+  frame and drives a pure-TypeScript `InstrumentCore`. Effects
+  (`kind: 'effect'`, one stereo input) work the same way:
+  - `src/devices/effects/effectHost.ts` hosts a pure `EffectCore` through an
+    `EffectRunner`, which handles click-free, bit-exact bypass;
+  - effects receive timed `transport` messages (beat, BPM, beats per bar) for
+    tempo sync;
+  - effects report meter values (the compressor's gain reduction) back over
+    their port.
+
+  A future plugin format can be adapted by writing a definition and a
+  wrapper processor that speaks this protocol.
 - **MIDI files.** `smf.ts` reads and writes the bytes (ticks, raw messages)
   and has no dependencies. Import converts ticks to beats with the file's
   PPQ and builds one batched `Command`. Export takes its notes and controller
@@ -201,6 +239,19 @@ src/util/         WAV encoder, waveform peaks
   and CCs
 - the schema 1 → 2 migration, validation, and a save → open round trip that
   must yield an identical project
+- every effect core:
+  - EQ gain at each band's target frequency, within 0.5 dB
+  - the compressor's static curve and its attack/release time constants
+  - delay time at a given tempo and note value, and ping-pong
+  - reverb RT60 against the Decay setting
+  - saturator output staying bounded
+  - filter response around the cutoff, and the LFO following song position
+  - bypass being a bit-identical passthrough with a click-free 10 ms
+    crossfade
+- the effect-chain diff (what posts params versus what rewires) and the
+  export-tail computation
+- every effect command with undo/redo, track duplication, the schema 2 → 3
+  migration, and a save → open round trip with chains
 - the WAV encoder, waveform peaks, and timeline geometry
 
 ### Browser smoke tests (optional)
@@ -216,6 +267,10 @@ cover:
   `e2e/make-midi-fixture.mjs`) and a malformed one, undoing the import, live
   DrumKit playback, a MIDI export → re-import, and WAV export of the import
   checked for signal
+- adding a Delay to a MIDI track from the Device panel and exporting WAV:
+  signal must continue after the last note ends, and must stop when the
+  delay is bypassed. This flow also covers the FX badge, drag-reordering,
+  live compressor gain reduction, and the master chain.
 
 They are not part of `npm test` and need extra tools:
 
@@ -228,6 +283,7 @@ node e2e/flows.mjs /tmp/ml
 node e2e/editing.mjs /tmp/ml
 node e2e/offline-render.mjs /tmp/ml
 node e2e/midi.mjs /tmp/ml
+node e2e/effects.mjs /tmp/ml
 ```
 
 ## License

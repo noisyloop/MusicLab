@@ -1,5 +1,6 @@
 import { zipSync, strToU8 } from 'fflate';
 import { describe, expect, it } from 'vitest';
+import { createEffectSlot } from '../model/project';
 import { fixture } from '../model/testUtil';
 import { SCHEMA_VERSION, type MidiTrack, type Project } from '../model/types';
 import { migrate, parseProject, ProjectFormatError } from '../model/validate';
@@ -120,5 +121,72 @@ describe('MIDI expression in project files', () => {
     expect(bad({ ccs: [{ beat: 0, controller: 128, value: 1 }] })).toThrow(/controller/);
     expect(bad({ ccs: [{ beat: 0, controller: 1, value: 1.5 }] })).toThrow(/integer/);
     expect(bad({ bends: {} })).toThrow(/bends/);
+  });
+});
+
+describe('insert effects in project files', () => {
+  const withChains = (): Project => {
+    const p = fixture();
+    return {
+      ...p,
+      master: { ...p.master, effects: [{ id: 'fx1', type: 'reverb', params: { ...createEffectSlot('reverb')!.params, decay: 4.5 }, bypass: false }] },
+      tracks: p.tracks.map((t, i) => ({
+        ...t,
+        effects: i === 0 ? [] : [
+          { id: 'fx2', type: 'eq3', params: createEffectSlot('eq3')!.params, bypass: true },
+          { id: 'fx3', type: 'delay', params: { ...createEffectSlot('delay')!.params, feedback: 0.7 }, bypass: false },
+        ],
+      })),
+    };
+  };
+
+  /** project.json exactly as schema 2 wrote it: no effect chains anywhere. */
+  const v2 = () => {
+    const raw = JSON.parse(JSON.stringify(fixture()));
+    raw.schemaVersion = 2;
+    delete raw.master.effects;
+    for (const t of raw.tracks) delete t.effects;
+    return raw;
+  };
+
+  it('migrates schema 2 by giving every track and the master an empty chain', () => {
+    const doc = v2();
+    const frozen = structuredClone(doc);
+    const migrated = migrate(doc);
+    expect(doc).toEqual(frozen);
+    expect(migrated.schemaVersion).toBe(3);
+    expect((migrated.master as { effects: unknown[] }).effects).toEqual([]);
+    expect((migrated.tracks as { effects: unknown[] }[]).every((t) => Array.isArray(t.effects) && t.effects.length === 0)).toBe(true);
+    expect(parseProject(doc)).toEqual(fixture());
+  });
+
+  it('save -> open keeps chains, order, params and bypass', () => {
+    const project = withChains();
+    const opened = readProjectFile(writeProjectFile({ project, audio: audio() })).project;
+    expect(opened).toEqual(project);
+    expect(opened.tracks[1]!.effects.map((e) => e.id)).toEqual(['fx2', 'fx3']);
+  });
+
+  it('rejects unknown effect types and other bad slots with a clear message', () => {
+    const bad = (mutate: (raw: ReturnType<typeof v2>) => void) => {
+      const raw = JSON.parse(JSON.stringify(withChains()));
+      mutate(raw);
+      return () => parseProject(raw);
+    };
+    expect(bad((r) => (r.tracks[1].effects[0].type = 'flanger'))).toThrow('tracks[1].effects[0].type: unknown effect type "flanger"');
+    expect(bad((r) => (r.master.effects[0].type = 'subsynth'))).toThrow('unknown effect type "subsynth"');
+    expect(bad((r) => (r.tracks[1].effects[1].id = 'fx2'))).toThrow(/duplicate effect id/);
+    expect(bad((r) => delete r.tracks[0].effects)).toThrow(/tracks\[0\]\.effects: expected array/);
+    expect(bad((r) => (r.tracks[1].effects[0].bypass = 'yes'))).toThrow(/bypass/);
+    expect(bad((r) => (r.tracks[1].instrument.type = 'reverb'))).toThrow(/not an instrument/);
+  });
+
+  it('clamps out-of-range effect params and fills missing ones', () => {
+    const raw = JSON.parse(JSON.stringify(withChains()));
+    raw.tracks[1].effects[1].params.feedback = 5;
+    delete raw.tracks[1].effects[1].params.mix;
+    const p = parseProject(raw);
+    expect(p.tracks[1]!.effects[1]!.params.feedback).toBe(0.95);
+    expect(p.tracks[1]!.effects[1]!.params.mix).toBe(0.3);
   });
 });

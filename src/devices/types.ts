@@ -45,6 +45,11 @@ export interface DeviceDefinition {
   processorName: string;
   numberOfInputs: number;
   outputChannelCount: number;
+  /**
+   * Effects only: how long (seconds) the effect keeps sounding after its
+   * input stops, for these params and tempo. Sizes the WAV export tail.
+   */
+  tailSeconds?: (params: Record<string, number>, ctx: { tempo: number; beatsPerBar: number }) => number;
 }
 
 /** A timed note/control event. `time` is in AudioContext seconds. */
@@ -73,18 +78,40 @@ export interface InstrumentCore {
   render(outL: Float32Array, outR: Float32Array, from: number, to: number): void;
 }
 
+/**
+ * Tempo and song position for effects (tempo-synced delay, filter LFO): at
+ * AudioContext time `time` the song is at `beat`, moving at `bpm`.
+ */
+export interface TransportEvent {
+  time: number;
+  beat: number;
+  bpm: number;
+  beatsPerBar: number;
+}
+
 /** Messages sent from the host to a device processor over its MessagePort. */
 export type DeviceMessage =
   | { type: 'events'; events: NoteEvent[] }
   | { type: 'params'; values: Record<string, number> }
   /** Drop queued (future) events and release all voices immediately. */
-  | { type: 'reset' };
+  | { type: 'reset' }
+  /** Effects: crossfade into or out of bypass. */
+  | { type: 'bypass'; bypass: boolean }
+  /** Effects: tempo/position update, applied at its time. */
+  | { type: 'transport'; transport: TransportEvent };
+
+/** Messages sent from an effect processor back to the host. */
+export type DeviceReply = { type: 'meter'; value: number };
 
 /** Options passed to the processor constructor (processorOptions). */
 export interface DeviceProcessorOptions {
   params: Record<string, number>;
   /** Events known up front (used by offline rendering). */
   events: NoteEvent[];
+  /** Effects: initial bypass state (no crossfade). */
+  bypass?: boolean;
+  /** Effects: transport updates known up front. */
+  transport?: TransportEvent[];
 }
 
 export function defaultParams(def: DeviceDefinition): Record<string, number> {

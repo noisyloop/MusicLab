@@ -133,6 +133,93 @@ the constraints. Each one is listed here.
   track between SubSynth and DrumKit (an undoable command). This wasn't
   asked for, but without it a drum track couldn't be made by hand.
 
+## Insert effects
+- **Model.** Each track has an `effects` list, and the master chain lives at
+  `project.master.effects`, next to the master volume. A slot is
+  `{ id, type, params, bypass }`. Schema 3's migration gives every track and
+  the master an empty list. Validation:
+  - rejects an unknown or non-effect type, naming the slot ("tracks[1].effects[0].type: unknown effect type …");
+  - rejects duplicate slot ids within a chain;
+  - clamps parameters and fills missing ones, the same as for instruments.
+
+  Chains are addressed as `MASTER_CHAIN` (`'master'`) or a track id.
+- **Inserts are pre-fader on the master too:** master input → chain → master
+  volume → meter/output.
+- **Rewiring.** A true crossfade between the old and new wiring isn't
+  possible when reordering. During the fade both orders would be connected
+  (A→B and B→A), and Web Audio mutes such cycles. So adding, removing, or
+  reordering effects ducks that chain's output to silence over 5 ms, rewires
+  it, and fades back in over 5 ms. The rewire waits about 12 ms of wall-clock
+  time (a timer) for the duck to finish, so the gap can stretch if the main
+  thread is busy. It is still click-free. Effects that stay in the chain keep
+  their state, so tails continue. Bypass needs no rewire at all: the
+  processor crossfades over 10 ms.
+- **Bypass.**
+  - Fully bypassed, the effect copies its input to its output (bit-identical)
+    and does no processing.
+  - Leaving full bypass starts the effect from a cleared state, so an old
+    tail doesn't reappear.
+  - A bypassed effect counts as inactive for the FX badge and the export tail.
+- **Tails and stop.** Effect processors are never reset on stop, seek, or
+  MIDI edits; only instruments are. Effects keep running for as long as the
+  track exists. The WAV export tail is 2 s (instrument releases) plus the
+  longest track-chain tail plus the master chain's tail, capped at **10 s**.
+  Within a chain, the tails of active effects add up:
+  - Delay: time × (1 + the number of repeats needed to fall 60 dB).
+  - Reverb: pre-delay + decay.
+  - Other effects: 0.
+- **Tempo sync.**
+  - Effects receive `transport` messages (context time, beat, BPM, beats per
+    bar). The engine sends one at play start and one at each loop wrap. It
+    also sends one when the tempo or bar length changes, at the current
+    position.
+  - An offline render gets the same information up front: the range start,
+    at time 0.
+  - A synced delay's time glides over about 50 ms when the tempo changes.
+  - The filter LFO's phase comes from the song position (beat ÷ period),
+    so it lines up with bars, and live and export match. It free-runs while
+    stopped.
+  - "1 bar" uses the project's beats per bar.
+
+  Converting a note value to a delay time inside an effect is a beats →
+  seconds conversion outside `scheduleWindow()`. It is local to the effect
+  and doesn't schedule anything.
+- **Effect designs.**
+  - **EQ3**:
+    - RBJ cookbook biquads (shelves with S = 1);
+    - the low cut is a 12 dB/oct high-pass that is always on, defaulting to
+      20 Hz.
+  - **Compressor**:
+    - a peak detector on max(|L|,|R|) (stereo-linked);
+    - the Giannoulis/Massberg/Reiss soft-knee curve;
+    - attack/release smoothing of the gain in dB;
+    - it reports gain reduction about every 20 ms.
+  - **Delay**:
+    - the wet signal goes through one-pole low- and high-pass filters, and
+      that filtered signal feeds back, so the filters are in the feedback
+      path;
+    - ping-pong feeds the mono sum into the left line and crosses the
+      feedback between channels;
+    - the line holds up to 5 s.
+  - **Reverb**:
+    - Freeverb's comb and allpass topology, with each comb's feedback derived
+      from the Decay (RT60), so the knob means seconds;
+    - no modulation and no noise, so it is deterministic.
+  - **Saturator**:
+    - 2× oversampling with zero-stuffing and 31-tap Blackman half-band FIRs;
+    - the dry signal is delayed 15 samples to stay aligned for the dry/wet
+      mix;
+    - Tone is a one-pole low-pass on the wet signal.
+  - **Filter**:
+    - a TPT state-variable filter;
+    - the LFO is ± Depth octaves around the cutoff.
+- **"Knobs"** are the same sliders the instrument uses (double-click
+  resets). Enum parameters with more than four options (such as the delay
+  sync values) are drop-downs.
+- **Track duplication** didn't exist yet. It is now ⧉ on the track header. It
+  inserts a "<name> copy" track below the original, with fresh track, clip,
+  and effect-slot ids, and the same content.
+
 ## MIDI files
 - **Parser/writer** written from the SMF spec (`src/midi/smf.ts`). Running
   status is supported on read but not used on write. SMPTE time division is

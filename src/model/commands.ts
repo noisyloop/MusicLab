@@ -7,15 +7,16 @@
  * example, an id that no longer exists) it returns the same project object,
  * and History records nothing.
  */
-import { getDeviceDefinition } from '../devices/registry';
+import { getDeviceDefinition, getEffectDefinition } from '../devices/registry';
 import { clampParam, defaultParams } from '../devices/types';
 import { newId } from './ids';
-import { findClip } from './project';
+import { findClip, findTrack } from './project';
 import { clampTempo, secondsPerBeat } from './time';
 import type {
   AudioAsset,
   AudioClip,
   Clip,
+  EffectSlot,
   Id,
   LoopRegion,
   MidiClip,
@@ -23,6 +24,7 @@ import type {
   Project,
   Track,
 } from './types';
+import { MASTER_CHAIN } from './types';
 
 export interface Command {
   label: string;
@@ -240,6 +242,113 @@ export function setInstrument(trackId: Id, type: string): Command {
         const def = getDeviceDefinition(type);
         if (t.kind !== 'midi' || !def || t.instrument.type === type) return t;
         return { ...t, instrument: { type, params: defaultParams(def) } };
+      }),
+  };
+}
+
+/**
+ * Copy a track right below itself: new track, clip and effect-slot ids, same
+ * content. Returns the command and the copy's id.
+ */
+export function duplicateTrack(project: Project, trackId: Id): { command: Command; newId: Id | null } {
+  const t = findTrack(project, trackId);
+  if (!t) return { command: { label: 'Duplicate track', apply: (p) => p }, newId: null };
+  const effects = t.effects.map((e) => ({ ...e, id: newId('fx'), params: { ...e.params } }));
+  const base = { ...t, id: newId('t'), name: `${t.name} copy`, effects };
+  const copy: Track =
+    t.kind === 'audio' ? { ...base, kind: 'audio', clips: t.clips.map((c) => ({ ...c, id: newId('c') })) } : { ...base, kind: 'midi', clips: t.clips.map((c) => ({ ...c, id: newId('c') })), instrument: t.instrument };
+  const index = project.tracks.indexOf(t) + 1;
+  return { command: { ...addTrack(copy, index), label: 'Duplicate track' }, newId: copy.id };
+}
+
+// ---------------------------------------------------------------------------
+// effect chains (chain = MASTER_CHAIN or a track id)
+
+function mapChain(project: Project, chain: Id, fn: (effects: EffectSlot[]) => EffectSlot[]): Project {
+  if (chain === MASTER_CHAIN) {
+    const effects = fn(project.master.effects);
+    return effects === project.master.effects ? project : { ...project, master: { ...project.master, effects } };
+  }
+  return mapTrack(project, chain, (t) => {
+    const effects = fn(t.effects);
+    return effects === t.effects ? t : { ...t, effects };
+  });
+}
+
+function mapSlot(project: Project, chain: Id, slotId: Id, fn: (s: EffectSlot) => EffectSlot): Project {
+  return mapChain(project, chain, (effects) => {
+    let changed = false;
+    const next = effects.map((e) => {
+      if (e.id !== slotId) return e;
+      const n = fn(e);
+      if (n !== e) changed = true;
+      return n;
+    });
+    return changed ? next : effects;
+  });
+}
+
+/** Insert an effect slot into a chain at `index` (default: the end). */
+export function addEffect(chain: Id, slot: EffectSlot, index?: number): Command {
+  const def = getEffectDefinition(slot.type);
+  return {
+    label: `Add ${def?.name ?? 'effect'}`,
+    apply: (p) =>
+      mapChain(p, chain, (effects) => {
+        if (!def || effects.some((e) => e.id === slot.id)) return effects;
+        const next = [...effects];
+        next.splice(index === undefined ? next.length : clamp(Math.round(index), 0, next.length), 0, slot);
+        return next;
+      }),
+  };
+}
+
+export function removeEffect(chain: Id, slotId: Id): Command {
+  return {
+    label: 'Remove effect',
+    apply: (p) =>
+      mapChain(p, chain, (effects) => {
+        const next = effects.filter((e) => e.id !== slotId);
+        return next.length === effects.length ? effects : next;
+      }),
+  };
+}
+
+/** Move an effect to position `toIndex` within its chain. */
+export function moveEffect(chain: Id, slotId: Id, toIndex: number): Command {
+  return {
+    label: 'Reorder effects',
+    apply: (p) =>
+      mapChain(p, chain, (effects) => {
+        const from = effects.findIndex((e) => e.id === slotId);
+        if (from < 0) return effects;
+        const to = clamp(Math.round(toIndex), 0, effects.length - 1);
+        if (to === from) return effects;
+        const next = [...effects];
+        const [slot] = next.splice(from, 1);
+        next.splice(to, 0, slot!);
+        return next;
+      }),
+  };
+}
+
+export function setEffectBypass(chain: Id, slotId: Id, bypass: boolean): Command {
+  return {
+    label: bypass ? 'Bypass effect' : 'Enable effect',
+    apply: (p) => mapSlot(p, chain, slotId, (s) => (s.bypass === bypass ? s : { ...s, bypass })),
+  };
+}
+
+export function setEffectParam(chain: Id, slotId: Id, paramId: string, value: number): Command {
+  return {
+    label: 'Change effect parameter',
+    mergeKey: `fx:${chain}:${slotId}:${paramId}`,
+    apply: (p) =>
+      mapSlot(p, chain, slotId, (s) => {
+        const desc = getEffectDefinition(s.type)?.params.find((d) => d.id === paramId);
+        if (!desc) return s;
+        const v = clampParam(desc, value);
+        return s.params[paramId] === v ? s : { ...s, params: { ...s.params, [paramId]: v } };
       }),
   };
 }

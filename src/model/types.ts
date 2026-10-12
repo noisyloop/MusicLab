@@ -6,7 +6,7 @@
  * happens inside the audio engine (see time.ts helpers it uses).
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export type Id = string;
 
@@ -35,6 +35,8 @@ export interface LoopRegion {
 export interface MasterBus {
   /** Linear gain, 0..2. */
   volume: number;
+  /** Master insert chain (schema 3+), processed before the master volume. */
+  effects: EffectSlot[];
 }
 
 export interface AudioAsset {
@@ -58,6 +60,8 @@ interface TrackBase {
   pan: number;
   mute: boolean;
   solo: boolean;
+  /** Insert effects (schema 3+), in signal order, before volume and pan. */
+  effects: EffectSlot[];
 }
 
 export interface AudioTrack extends TrackBase {
@@ -144,3 +148,14 @@ export interface DeviceState {
   type: string;
   params: Record<string, number>;
 }
+
+/** One insert effect in a chain: an effect device's state plus its own id and bypass flag. */
+export interface EffectSlot extends DeviceState {
+  id: Id;
+  /** When true the effect passes audio through untouched. */
+  bypass: boolean;
+}
+
+/** Addresses the master chain in effect commands; any other value is a track id. */
+export const MASTER_CHAIN = 'master';
+export type ChainId = Id;

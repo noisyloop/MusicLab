@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { app } from '../app/controller';
 import { useStore } from '../app/store';
 import { projectEndBeat } from '../model/project';
+import { exportTailSeconds } from '../engine/tails';
 import { beatsToSeconds, formatSeconds } from '../model/time';
 import type { WavFormat } from '../util/wav';
 
@@ -25,7 +26,7 @@ export function ExportDialog() {
           <label>
             <input type="radio" checked={range === 'loop'} onChange={() => setRange('loop')} /> Loop region
           </label>
-          <div className="dim">Length {formatSeconds(beatsToSeconds(Math.max(0, len), project.tempo))} + 2 s tail</div>
+          <div className="dim">Length {formatSeconds(beatsToSeconds(Math.max(0, len), project.tempo))} + {Math.round(exportTailSeconds(project) * 10) / 10} s tail (instrument release and effect tails)</div>
         </fieldset>
         <fieldset>
           <legend>Format</legend>
