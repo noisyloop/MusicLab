@@ -45,7 +45,10 @@ export function installKeyboard(app: AppController): () => void {
       else if (key === 'o') void app.openProject();
       else if (key === 'e' && e.shiftKey) app.setExportOpen(true);
       else if (key === 'e') app.splitAtPlayhead();
-      else if (key === 'd') app.duplicateSelectedClips();
+      else if (key === 'd') {
+        // In the piano roll, Ctrl+D duplicates notes (handled there); never the clip.
+        if (s.focus === 'arrangement') app.duplicateSelectedClips();
+      }
       else if (key === 'a') app.selectAllClips();
       else if (key === 'l') app.toggleLoop();
       else if (key === 'm' && e.shiftKey) app.insertMidiClipAtPlayhead();
