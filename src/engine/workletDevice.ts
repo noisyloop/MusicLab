@@ -4,10 +4,12 @@
  */
 import { getDeviceDefinition, listDeviceDefinitions } from '../devices/registry';
 import type { DeviceDefinition, DeviceMessage, DeviceProcessorOptions, NoteEvent } from '../devices/types';
+import drumkitProcessorUrl from '../devices/drumkit/processor.ts?worker&url';
 import subsynthProcessorUrl from '../devices/subsynth/processor.ts?worker&url';
 
 const processorUrls: Record<string, string> = {
   subsynth: subsynthProcessorUrl,
+  drumkit: drumkitProcessorUrl,
 };
 
 const loaded = new WeakMap<BaseAudioContext, Promise<void>>();

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addAsset, addClip, addNotes, addTrack, batch, deleteClips, deleteNotes, duplicateClips, moveClips, moveTrack,
   removeTrack, renameClip, renameTrack, setClipGain, setDeviceParam, setLoop, setMasterVolume, setProjectName,
-  setTempo, setTrackMix, splitClips, trimClipEnd, trimClipStart, updateNotes, type Command,
+  setBeatsPerBar, setInstrument, setTempo, setTrackMix, splitClips, trimClipEnd, trimClipStart, updateNotes, type Command,
 } from './commands';
 import { History } from './history';
 import { createTrack, findClip, isTrackAudible } from './project';
@@ -230,5 +230,46 @@ describe('note commands', () => {
   it('works with fresh midi clip', () => {
     const p = roundTrip(addClip('tm', midiClip('m2', 16, 4)));
     expect(clip(p, 'm2')).toBeDefined();
+  });
+});
+
+describe('MIDI expression data follows clip edits', () => {
+  const expressive = (): Project => {
+    const p = fixture();
+    const m = p.tracks[1] as MidiTrack;
+    const clip = { ...m.clips[0]!, bends: [{ beat: 1, semitones: 2 }, { beat: 3, semitones: 0 }], ccs: [{ beat: 2, controller: 74, value: 90 }] };
+    return { ...p, tracks: [p.tracks[0]!, { ...m, clips: [clip] }] };
+  };
+
+  it('split keeps bends and CCs on both halves, in content coordinates', () => {
+    const p = roundTrip(splitClips(['m1'], 6, ['r']), expressive());
+    const left = clip(p, 'm1') as MidiClip;
+    const right = clip(p, 'r') as MidiClip;
+    expect(left.bends).toEqual(right.bends);
+    expect(right.ccs).toEqual([{ beat: 2, controller: 74, value: 90 }]);
+    expect(right.contentOffset).toBe(2);
+  });
+
+  it('trim moves the content offset, leaving points anchored in time', () => {
+    const p = roundTrip(trimClipStart('m1', 5), expressive());
+    const c = clip(p, 'm1') as MidiClip;
+    expect(c.contentOffset).toBe(1);
+    expect(c.bends).toEqual([{ beat: 1, semitones: 2 }, { beat: 3, semitones: 0 }]);
+  });
+
+  it('duplicate copies them', () => {
+    const { command, newIds } = duplicateClips(expressive(), ['m1']);
+    const p = roundTrip(command, expressive());
+    expect((clip(p, newIds[0]!) as MidiClip).bends).toEqual((clip(p, 'm1') as MidiClip).bends);
+    expect((clip(p, newIds[0]!) as MidiClip).ccs).toHaveLength(1);
+  });
+
+  it('setInstrument swaps the device with defaults, setBeatsPerBar clamps', () => {
+    const p = roundTrip(setInstrument('tm', 'drumkit'));
+    expect((p.tracks[1] as MidiTrack).instrument.type).toBe('drumkit');
+    expect((p.tracks[1] as MidiTrack).instrument.params.kickLevel).toBe(0.8);
+    expect(setInstrument('tm', 'nope').apply(fixture())).toEqual(fixture());
+    expect(roundTrip(setBeatsPerBar(3)).beatsPerBar).toBe(3);
+    expect(roundTrip(setBeatsPerBar(99)).beatsPerBar).toBe(32);
   });
 });

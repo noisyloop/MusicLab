@@ -4,9 +4,11 @@ import {
   SCHEMA_VERSION,
   type AudioAsset,
   type AudioClip,
+  type ControlChangePoint,
   type DeviceState,
   type MidiClip,
   type Note,
+  type PitchBendPoint,
   type Project,
   type Track,
 } from './types';
@@ -51,6 +53,26 @@ function parseNote(v: unknown, path: string): Note {
     start: num(o.start, `${path}.start`),
     length: num(o.length, `${path}.length`, 1e-6),
     velocity: num(o.velocity, `${path}.velocity`, 0, 1),
+  };
+}
+
+function int(v: unknown, path: string, min: number, max: number): number {
+  const n = num(v, path, min, max);
+  if (!Number.isInteger(n)) throw new ProjectFormatError(`${path}: expected integer`);
+  return n;
+}
+
+function parseBend(v: unknown, path: string): PitchBendPoint {
+  const o = obj(v, path);
+  return { beat: num(o.beat, `${path}.beat`), semitones: num(o.semitones, `${path}.semitones`, -96, 96) };
+}
+
+function parseCc(v: unknown, path: string): ControlChangePoint {
+  const o = obj(v, path);
+  return {
+    beat: num(o.beat, `${path}.beat`),
+    controller: int(o.controller, `${path}.controller`, 0, 127),
+    value: int(o.value, `${path}.value`, 0, 127),
   };
 }
 
@@ -112,7 +134,7 @@ function parseTrack(v: unknown, path: string): Track {
         const p = `${path}.clips[${i}]`;
         const co = obj(c, p);
         if (co.kind !== 'midi') throw new ProjectFormatError(`${p}.kind: expected "midi"`);
-        return {
+        const clip: MidiClip = {
           id: str(co.id, `${p}.id`),
           kind: 'midi',
           name: str(co.name, `${p}.name`),
@@ -121,6 +143,10 @@ function parseTrack(v: unknown, path: string): Track {
           contentOffset: num(co.contentOffset, `${p}.contentOffset`),
           notes: arr(co.notes, `${p}.notes`).map((n, j) => parseNote(n, `${p}.notes[${j}]`)),
         };
+        // Optional expression lists: keep them absent when absent so files round-trip exactly.
+        if (co.bends !== undefined) clip.bends = arr(co.bends, `${p}.bends`).map((b, j) => parseBend(b, `${p}.bends[${j}]`)).sort((a, b) => a.beat - b.beat);
+        if (co.ccs !== undefined) clip.ccs = arr(co.ccs, `${p}.ccs`).map((c, j) => parseCc(c, `${p}.ccs[${j}]`)).sort((a, b) => a.beat - b.beat);
+        return clip;
       }),
     };
   }
@@ -140,16 +166,48 @@ function parseAsset(v: unknown, path: string): AudioAsset {
 }
 
 /**
- * Upgrade older documents to the current schema. There is only one version
- * so far; this is the hook where future migrations go.
+ * One step per schema version: each takes a document of version N and
+ * returns one of version N + 1. Steps must not mutate their input.
  */
+const MIGRATIONS: Record<number, (doc: Obj) => Obj> = {
+  // 1 -> 2: MIDI clips gained optional `bends` and `ccs` lists. Version 1
+  // clips never carry expression data, so any such keys are stray and dropped;
+  // everything else is unchanged.
+  1: (doc) => ({
+    ...doc,
+    schemaVersion: 2,
+    tracks: Array.isArray(doc.tracks)
+      ? doc.tracks.map((t: unknown) => {
+          if (typeof t !== 'object' || t === null) return t;
+          const track = t as Obj;
+          if (track.kind !== 'midi' || !Array.isArray(track.clips)) return track;
+          return {
+            ...track,
+            clips: track.clips.map((c: unknown) => {
+              if (typeof c !== 'object' || c === null) return c;
+              const { bends: _bends, ccs: _ccs, ...rest } = c as Obj;
+              return rest;
+            }),
+          };
+        })
+      : doc.tracks,
+  }),
+};
+
+/** Upgrade older documents to the current schema, one version at a time. */
 export function migrate(doc: Obj): Obj {
   const version = doc.schemaVersion;
-  if (typeof version !== 'number') throw new ProjectFormatError('schemaVersion: missing');
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) throw new ProjectFormatError('schemaVersion: missing');
   if (version > SCHEMA_VERSION) {
     throw new ProjectFormatError(`This project was saved by a newer MusicLab (schema ${version}); this version supports ${SCHEMA_VERSION}.`);
   }
-  return doc;
+  let out = doc;
+  for (let v = version; v < SCHEMA_VERSION; v++) {
+    const step = MIGRATIONS[v];
+    if (!step) throw new ProjectFormatError(`No migration from schema ${v}.`);
+    out = step(out);
+  }
+  return out;
 }
 
 /** Validate untrusted JSON and turn it into a Project. Throws ProjectFormatError. */

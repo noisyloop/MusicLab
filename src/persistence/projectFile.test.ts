@@ -1,7 +1,8 @@
 import { zipSync, strToU8 } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { fixture } from '../model/testUtil';
-import { parseProject, ProjectFormatError } from '../model/validate';
+import { SCHEMA_VERSION, type MidiTrack, type Project } from '../model/types';
+import { migrate, parseProject, ProjectFormatError } from '../model/validate';
 import { readProjectFile, writeProjectFile } from './projectFile';
 
 const audio = () => new Map([['a1', Uint8Array.from([82, 73, 70, 70, 1, 2, 3, 4, 250])]]);
@@ -54,5 +55,70 @@ describe('parseProject', () => {
     const inst = (p.tracks[1] as { instrument: { params: Record<string, number> } }).instrument.params;
     expect(inst.cutoff).toBe(2200);
     expect(inst.bogus).toBeUndefined();
+  });
+});
+
+describe('schema migration', () => {
+  /** A project.json exactly as schema 1 wrote it. */
+  const v1 = () => {
+    const raw = JSON.parse(JSON.stringify(fixture()));
+    raw.schemaVersion = 1;
+    return raw;
+  };
+
+  it('upgrades a schema 1 document to the current schema without changing its content', () => {
+    const doc = v1();
+    const frozen = structuredClone(doc);
+    const migrated = migrate(doc);
+    expect(doc).toEqual(frozen); // input not mutated
+    expect(migrated.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(parseProject(doc)).toEqual(fixture());
+  });
+
+  it('drops stray expression keys from schema 1 MIDI clips', () => {
+    const doc = v1();
+    doc.tracks[1].clips[0].bends = 'not a list';
+    doc.tracks[1].clips[0].ccs = [{ junk: true }];
+    const p = parseProject(doc);
+    const clip = (p.tracks[1] as MidiTrack).clips[0]!;
+    expect('bends' in clip).toBe(false);
+    expect('ccs' in clip).toBe(false);
+  });
+
+  it('opens a schema 1 .musiclab file', () => {
+    const bytes = zipSync({ 'project.json': strToU8(JSON.stringify(v1())), 'audio/a1/loop.wav': audio().get('a1')! });
+    expect(readProjectFile(bytes).project).toEqual(fixture());
+  });
+
+  it('rejects a missing or nonsensical version', () => {
+    const { schemaVersion: _v, ...rest } = fixture();
+    expect(() => parseProject(rest)).toThrow(/schemaVersion/);
+    expect(() => parseProject({ ...fixture(), schemaVersion: 0 })).toThrow(/schemaVersion/);
+  });
+});
+
+describe('MIDI expression in project files', () => {
+  const expressive = (): Project => {
+    const p = fixture();
+    const m = p.tracks[1] as MidiTrack;
+    const clip = { ...m.clips[0]!, bends: [{ beat: 0.5, semitones: -1.25 }, { beat: 1, semitones: 0 }], ccs: [{ beat: 0, controller: 74, value: 127 }] };
+    return { ...p, tracks: [p.tracks[0]!, { ...m, clips: [clip] }] };
+  };
+
+  it('save -> open keeps bends and CCs', () => {
+    const project = expressive();
+    expect(readProjectFile(writeProjectFile({ project, audio: audio() })).project).toEqual(project);
+  });
+
+  it('validates bends and CCs', () => {
+    const bad = (patch: object) => {
+      const raw = JSON.parse(JSON.stringify(expressive()));
+      Object.assign(raw.tracks[1].clips[0], patch);
+      return () => parseProject(raw);
+    };
+    expect(bad({ bends: [{ beat: 0, semitones: 'up' }] })).toThrow(/semitones/);
+    expect(bad({ ccs: [{ beat: 0, controller: 128, value: 1 }] })).toThrow(/controller/);
+    expect(bad({ ccs: [{ beat: 0, controller: 1, value: 1.5 }] })).toThrow(/integer/);
+    expect(bad({ bends: {} })).toThrow(/bends/);
   });
 });

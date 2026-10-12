@@ -78,11 +78,12 @@ export interface OpenedFile {
 }
 
 /** Ask the user for a file. Returns null if cancelled. */
-export async function openFile(opts: { extension: string; mime: string; description: string }): Promise<OpenedFile | null> {
+export async function openFile(opts: { extension: string | string[]; mime: string; description: string }): Promise<OpenedFile | null> {
+  const extensions = Array.isArray(opts.extension) ? opts.extension : [opts.extension];
   if (typeof pickerWindow.showOpenFilePicker === 'function') {
     try {
       const [handle] = await pickerWindow.showOpenFilePicker({
-        types: [{ description: opts.description, accept: { [opts.mime]: [opts.extension] } }],
+        types: [{ description: opts.description, accept: { [opts.mime]: extensions } }],
       });
       if (!handle) return null;
       return { file: await handle.getFile(), handle };
@@ -94,7 +95,7 @@ export async function openFile(opts: { extension: string; mime: string; descript
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = opts.extension;
+    input.accept = extensions.join(',');
     input.onchange = () => resolve(input.files?.[0] ? { file: input.files[0], handle: null } : null);
     input.oncancel = () => resolve(null);
     input.click();

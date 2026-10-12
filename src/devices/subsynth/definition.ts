@@ -14,7 +14,7 @@ export const subsynthDefinition: DeviceDefinition = {
     { kind: 'enum', id: 'wave', name: 'Wave', options: [...SUBSYNTH_WAVES], default: 0, group: 'Oscillator' },
     { kind: 'continuous', id: 'osc2Mix', name: 'Osc 2', min: 0, max: 1, default: 0.5, scale: 'linear', group: 'Oscillator' },
     { kind: 'continuous', id: 'detune', name: 'Detune', min: 0, max: 50, default: 8, scale: 'linear', unit: 'ct', group: 'Oscillator' },
-    { kind: 'continuous', id: 'octave', name: 'Octave', min: -2, max: 2, default: 0, scale: 'linear', group: 'Oscillator' },
+    { kind: 'continuous', id: 'octave', name: 'Octave', min: -2, max: 2, default: 0, scale: 'linear', step: 1, group: 'Oscillator' },
 
     { kind: 'continuous', id: 'cutoff', name: 'Cutoff', min: 30, max: 18000, default: 2200, scale: 'log', unit: 'Hz', group: 'Filter' },
     { kind: 'continuous', id: 'resonance', name: 'Reso', min: 0, max: 1, default: 0.2, scale: 'linear', group: 'Filter' },
@@ -31,5 +31,8 @@ export const subsynthDefinition: DeviceDefinition = {
 
     { kind: 'continuous', id: 'velSens', name: 'Vel Sens', min: 0, max: 1, default: 0.7, scale: 'linear', group: 'Output' },
     { kind: 'continuous', id: 'gain', name: 'Gain', min: 0, max: 1, default: 0.5, scale: 'linear', group: 'Output' },
+
+    { kind: 'continuous', id: 'bendRange', name: 'Bend Range', min: 0, max: 24, default: 12, scale: 'linear', unit: 'st', step: 1, group: 'MIDI' },
+    { kind: 'continuous', id: 'filterCc', name: 'Filter CC', min: 0, max: 127, default: 20, scale: 'linear', unit: 'cc', step: 1, group: 'MIDI' },
   ],
 };

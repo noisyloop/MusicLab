@@ -1,5 +1,5 @@
 import { useCallback, useRef, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { adaptiveGrid, app, effectiveGrid, RULER_HEIGHT, TRACK_HEIGHT } from '../app/controller';
+import { adaptiveGrid, app, effectiveGrid, isMidiFile, RULER_HEIGHT, TRACK_HEIGHT } from '../app/controller';
 import { moveClips, setLoop, trimClipEnd, trimClipStart, type ClipMove, type Command } from '../model/commands';
 import { findClip } from '../model/project';
 import { secondsPerBeat, snapBeat, snapFloor } from '../model/time';
@@ -326,7 +326,11 @@ export function Timeline() {
     const beat = hint?.beat ?? Math.max(0, snap(xToBeat(x, v), false));
     const ti = trackIndexAtY(y, app.project.tracks.length, v, layout);
     const trackId = ti >= 0 ? app.project.tracks[ti]!.id : null;
-    void app.importAudioFiles(files, trackId, beat);
+    void (async () => {
+      for (const f of files.filter(isMidiFile)) await app.importMidiFile(f, beat, trackId);
+      const rest = files.filter((f) => !isMidiFile(f));
+      if (rest.length > 0) await app.importAudioFiles(rest, trackId, beat);
+    })();
   }
 
   return (
@@ -430,7 +434,7 @@ function drawTimeline(ctx: CanvasRenderingContext2D, size: CanvasSize, project: 
     ctx.fillStyle = theme.textDim;
     ctx.font = '14px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Drop audio files here, or add a track with the buttons on the left.', width / 2, RULER_HEIGHT + 80);
+    ctx.fillText('Drop audio or MIDI files here, or add a track with the buttons on the left.', width / 2, RULER_HEIGHT + 80);
     ctx.textAlign = 'left';
   }
 }

@@ -20,10 +20,24 @@ are saved to your own disk as a single `.musiclab` file.
   the arrow keys. Every edit can be undone and redone.
 - Mixer: per-track volume, pan, mute, solo, and stereo peak meters, plus master
   volume and meter.
-- MIDI: piano roll (draw, move, resize, delete notes, edit velocity, transpose),
-  plus a built-in polyphonic subtractive synth ("SubSynth") running in an
-  AudioWorklet, with its parameters in the Device panel. The computer keyboard
-  plays the selected MIDI track.
+- MIDI: piano roll (draw, move, resize, delete notes, edit velocity, transpose,
+  read-only pitch-bend curve), plus two built-in instruments running in
+  AudioWorklets, with their parameters in the Device panel:
+  - **SubSynth**, a polyphonic subtractive synth. It follows pitch bend (with
+    a Bend Range parameter) and moves its filter cutoff with CC 1, CC 74,
+    and a configurable Filter CC.
+  - **DrumKit**, a synthesized General MIDI drum kit (kick, snare, closed and
+    open hats, cymbals, toms, rim, clap, and blips for the other percussion
+    notes), with a Level and Tune knob per voice group.
+
+  The computer keyboard plays the selected MIDI track.
+- Standard MIDI Files: drop a `.mid`/`.midi` file onto the arrangement (or
+  use **Import MIDI**, which imports at the playhead). You get one MIDI track
+  per file track (format 0 files are split by channel), named from the file.
+  Channel 10 gets DrumKit and the other channels get SubSynth. Notes, pitch
+  bend, and controllers are kept, and the whole import is one undo step.
+  **Export MIDI** writes a format-1 `.mid` (whole song or loop region) with a
+  tempo track and one track per MIDI track.
 - Save/Open `.musiclab` files with the File System Access API where the
   browser supports it, and download / file input everywhere else. The page
   warns before you leave with unsaved changes.
@@ -115,11 +129,15 @@ Opening `index.html` straight from `file://` will not work.
 A `.musiclab` file is a zip archive:
 
 ```
-project.json                   # the project model (has "schemaVersion")
+project.json                   # the project model (has "schemaVersion", currently 2)
 audio/<assetId>/<fileName>     # each original audio file, byte-for-byte
 ```
 
 `project.json` stores all musical time in beats, along with the project tempo.
+MIDI clips can carry optional `bends` (`{ beat, semitones }`) and `ccs`
+(`{ beat, controller, value }`) lists next to their notes. These use the
+same clip-content beats as notes, so trimming and splitting treat them the
+same way (added in schema 2).
 Opening a file validates it fully (`src/model/validate.ts`). A file written by
 a newer schema version is refused with a clear message, and older versions
 pass through `migrate()`.
@@ -129,7 +147,8 @@ pass through `migrate()`.
 ```
 src/model/        plain-data project model, commands (every edit), undo history, validation
 src/engine/       Web Audio engine: scheduler math, AudioEngine (live + offline), WorkletDevice host
-src/devices/      Device interface + SubSynth (descriptors, DSP core, AudioWorklet processor)
+src/devices/      Device interface, shared worklet processor host, SubSynth and DrumKit (descriptors + DSP cores)
+src/midi/         Standard MIDI File parser/writer (smf.ts), SMF -> model import, project -> SMF export
 src/persistence/  .musiclab read/write (fflate)
 src/app/          controller (intents, file IO, engine lifecycle), stores, keyboard
 src/ui/           React chrome + canvas timeline and piano roll
@@ -151,25 +170,54 @@ src/util/         WAV encoder, waveform peaks
   touch Web Audio objects.
 - **Devices.** A `DeviceDefinition` (parameter descriptors, processor name,
   I/O) plus an AudioWorklet processor that speaks a small message protocol:
-  timed `noteOn`/`noteOff`/`allNotesOff` events, `params`, and `reset`. Events
-  known in advance (offline render) arrive through `processorOptions`. A future
-  plugin format can be adapted by writing a definition and a wrapper processor
-  that speaks this protocol.
+  timed `noteOn`/`noteOff`/`allNotesOff`/`pitchBend`/`cc` events, `params`,
+  and `reset`. Events known in advance (offline render) arrive through
+  `processorOptions`. Both instruments share one processor host
+  (`src/devices/processorHost.ts`). It applies each event at its exact sample
+  frame and drives a pure-TypeScript `InstrumentCore`. A future plugin format
+  can be adapted by writing a definition and a wrapper processor that speaks
+  this protocol.
+- **MIDI files.** `smf.ts` reads and writes the bytes (ticks, raw messages)
+  and has no dependencies. Import converts ticks to beats with the file's
+  PPQ and builds one batched `Command`. Export takes its notes and controller
+  events from `collectMidi()` in `src/engine/schedule.ts`, the same function
+  playback uses, so the file contains exactly what plays. Converting those
+  beats to seconds still happens only in `scheduleWindow()`.
 
 ## Tests
 
-`npm test` runs the unit tests. They cover the project model, every command
-including undo/redo, history merging and dirty tracking, beat/second
-conversion, the scheduler's clip-window and loop math, the synth DSP, the WAV
-encoder, waveform peaks, timeline geometry, validation, and a save → open
-round trip that must yield an identical project.
+`npm test` runs the unit tests. They cover:
+
+- the project model and every command, including undo/redo
+- history merging and dirty tracking
+- beat/second and tick/beat conversion
+- the scheduler's clip-window, loop, and bend/CC chasing math
+- the SubSynth DSP, including pitch bend and CC filter mapping
+- the DrumKit DSP, which must render bit-identically whatever the
+  render-quantum splits
+- the SMF parser: formats 0 and 1, running status, note-on with velocity 0,
+  overlapping same-pitch notes, RPN bend range, and malformed files
+- a MIDI export → import round trip that must yield identical notes, bends,
+  and CCs
+- the schema 1 → 2 migration, validation, and a save → open round trip that
+  must yield an identical project
+- the WAV encoder, waveform peaks, and timeline geometry
 
 ### Browser smoke tests (optional)
 
 `e2e/` contains Playwright scripts that drive the real app in Chromium. They
-cover file drops (including a corrupt file), clip editing, MIDI and synth,
-mixer, loop, WAV export checked for signal, and save → reload → open. They are
-not part of `npm test` and need extra tools:
+cover:
+
+- file drops, including a corrupt file
+- clip editing, MIDI and synth, mixer, and loop
+- WAV export checked for signal
+- save → reload → open
+- dropping a Standard MIDI File (`e2e/fixtures/groove.mid`, generated by
+  `e2e/make-midi-fixture.mjs`) and a malformed one, undoing the import, live
+  DrumKit playback, a MIDI export → re-import, and WAV export of the import
+  checked for signal
+
+They are not part of `npm test` and need extra tools:
 
 ```sh
 npm i --no-save playwright-core
@@ -179,6 +227,7 @@ npm run dev &                          # in another terminal
 node e2e/flows.mjs /tmp/ml
 node e2e/editing.mjs /tmp/ml
 node e2e/offline-render.mjs /tmp/ml
+node e2e/midi.mjs /tmp/ml
 ```
 
 ## License

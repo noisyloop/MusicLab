@@ -1,8 +1,8 @@
 import { app } from '../app/controller';
 import { useStore } from '../app/store';
-import { getDeviceDefinition } from '../devices/registry';
+import { getDeviceDefinition, listDeviceDefinitions } from '../devices/registry';
 import { normToValue, valueToNorm, type ContinuousParam, type ParamDescriptor } from '../devices/types';
-import { setDeviceParam } from '../model/commands';
+import { setDeviceParam, setInstrument } from '../model/commands';
 import { findTrack } from '../model/project';
 
 function formatValue(p: ContinuousParam, v: number): string {
@@ -10,6 +10,8 @@ function formatValue(p: ContinuousParam, v: number): string {
   if (unit === 'Hz') return v >= 1000 ? `${(v / 1000).toFixed(2)} kHz` : `${Math.round(v)} Hz`;
   if (unit === 's') return v >= 1 ? `${v.toFixed(2)} s` : `${Math.round(v * 1000)} ms`;
   if (unit === 'ct') return `${v.toFixed(1)} ct`;
+  if (unit === 'st') return p.min < 0 ? `${v > 0 ? '+' : ''}${(Math.round(v * 10) / 10).toString()} st` : `±${Math.round(v)} st`;
+  if (unit === 'cc') return `CC ${Math.round(v)}`;
   if (p.id === 'octave') return `${v > 0 ? '+' : ''}${Math.round(v)}`;
   return `${Math.round(v * 100)}%`;
 }
@@ -30,7 +32,7 @@ function ParamControl({ trackId, param, value }: { trackId: string; param: Param
       </div>
     );
   }
-  const stepped = param.id === 'octave';
+  const step = param.step;
   return (
     <div className="param">
       <div className="param-name">{param.name}</div>
@@ -39,13 +41,9 @@ function ParamControl({ trackId, param, value }: { trackId: string; param: Param
         aria-label={param.name}
         min={0}
         max={1}
-        step={stepped ? 1 / (param.max - param.min) : 0.001}
+        step={step && param.scale === 'linear' ? step / (param.max - param.min) : 0.001}
         value={valueToNorm(param, value)}
-        onChange={(e) => {
-          let v = normToValue(param, Number(e.currentTarget.value));
-          if (stepped) v = Math.round(v);
-          set(v);
-        }}
+        onChange={(e) => set(normToValue(param, Number(e.currentTarget.value)))}
         onPointerUp={() => app.endGesture()}
         onDoubleClick={() => set(param.default)}
         title="Double-click to reset"
@@ -66,7 +64,21 @@ export function DevicePanel() {
   return (
     <div className="device">
       <div className="device-title">
-        {def.name} <span className="dim">on {track.name}</span>
+        <select
+          aria-label="Instrument"
+          data-testid="instrument-select"
+          value={def.type}
+          onChange={(e) => app.execute(setInstrument(track.id, e.currentTarget.value))}
+        >
+          {listDeviceDefinitions()
+            .filter((d) => d.kind === 'instrument')
+            .map((d) => (
+              <option key={d.type} value={d.type}>
+                {d.name}
+              </option>
+            ))}
+        </select>{' '}
+        <span className="dim">on {track.name}</span>
       </div>
       <div className="device-groups">
         {groups.map((g) => (

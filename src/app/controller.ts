@@ -14,6 +14,8 @@ import { createProject, createTrack, findClip, findTrack, nextTrackColor, nextTr
 import { secondsToBeats, snapBeat } from '../model/time';
 import type { AudioAsset, AudioClip, Clip, Id, MidiClip, Project, Track } from '../model/types';
 import { PROJECT_EXTENSION, PROJECT_MIME, readProjectFile, writeProjectFile } from '../persistence/projectFile';
+import { exportMidiFile } from '../midi/export';
+import { planMidiImport, readMidiFile } from '../midi/import';
 import { encodeWav, type WavFormat } from '../util/wav';
 import { AssetStore } from './assets';
 import { isAbortError, openFile, saveBytes } from './fileAccess';
@@ -61,13 +63,23 @@ export interface AppState {
   keyboardVelocity: number;
   busy: string | null;
   exportOpen: boolean;
+  midiExportOpen: boolean;
 }
 
 export const TRACK_HEIGHT = 64;
 export const RULER_HEIGHT = 34;
 export const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.ogg', '.flac', '.oga', '.m4a', '.aac', '.aif', '.aiff', '.webm'];
 
+export const MIDI_EXTENSIONS = ['.mid', '.midi'];
+export const MIDI_MIME = 'audio/midi';
+
+export function isMidiFile(f: File): boolean {
+  const name = f.name.toLowerCase();
+  return MIDI_EXTENSIONS.some((e) => name.endsWith(e)) || f.type === 'audio/midi' || f.type === 'audio/x-midi';
+}
+
 export function isAudioFile(f: File): boolean {
+  if (isMidiFile(f)) return false;
   const name = f.name.toLowerCase();
   return f.type.startsWith('audio/') || AUDIO_EXTENSIONS.some((e) => name.endsWith(e));
 }
@@ -131,6 +143,7 @@ export class AppController {
       keyboardVelocity: 0.8,
       busy: null,
       exportOpen: false,
+      midiExportOpen: false,
     });
     this.startAnimationLoop();
   }
@@ -412,7 +425,7 @@ export class AppController {
   async importAudioFiles(files: File[], trackId: Id | null, beat: number): Promise<void> {
     const audioFiles = files.filter((f) => {
       if (isAudioFile(f)) return true;
-      if (!f.name.toLowerCase().endsWith(PROJECT_EXTENSION)) this.toast(`"${f.name}" is not an audio file.`);
+      if (!f.name.toLowerCase().endsWith(PROJECT_EXTENSION) && !isMidiFile(f)) this.toast(`"${f.name}" is not an audio file.`);
       return false;
     });
     if (audioFiles.length === 0) return;
@@ -487,6 +500,76 @@ export class AppController {
     });
     this.execute(batch(decoded.length > 1 ? `Import ${decoded.length} audio files` : 'Import audio file', cmds));
     this.store.set({ selectedClipIds: clipIds });
+  }
+
+  // -------------------------------------------------------------------------
+  // MIDI files
+
+  /**
+   * Import a Standard MIDI File as new MIDI tracks (one undo step), with
+   * clips starting at `beat`. New tracks go below `trackId` if given, else at
+   * the end. A malformed file shows an error toast and changes nothing.
+   */
+  async importMidiFile(file: File, beat: number, trackId: Id | null = null): Promise<void> {
+    let plan;
+    try {
+      const imported = readMidiFile(new Uint8Array(await file.arrayBuffer()));
+      const p = this.project;
+      const target = trackId ? findTrack(p, trackId) : undefined;
+      plan = planMidiImport(p, imported, {
+        beat,
+        insertIndex: target ? p.tracks.indexOf(target) + 1 : undefined,
+        label: `Import MIDI "${stripExtension(file.name)}"`,
+      });
+    } catch (e) {
+      this.toast(`Could not import "${file.name}": ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    if (this.execute(plan.command)) {
+      this.store.set({ selectedClipIds: plan.clipIds, selectedTrackId: plan.trackIds[0] ?? null });
+    }
+  }
+
+  /** File → Import MIDI: pick a file and import it at the playhead. */
+  async openMidiImport(): Promise<void> {
+    let picked;
+    try {
+      picked = await openFile({ extension: MIDI_EXTENSIONS, mime: MIDI_MIME, description: 'MIDI file' });
+    } catch (e) {
+      this.toast(`Could not open file: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    if (!picked) return;
+    const grid = effectiveGrid(this.state.view) || 1;
+    await this.importMidiFile(picked.file, snapBeat(this.position.get().beat, grid), this.state.selectedTrackId);
+  }
+
+  setMidiExportOpen(open: boolean): void {
+    this.store.set({ midiExportOpen: open });
+  }
+
+  /** File → Export MIDI: a format-1 .mid of the MIDI tracks (whole song or loop region). */
+  async exportMidi(range: 'song' | 'loop'): Promise<void> {
+    const project = this.project;
+    this.store.set({ midiExportOpen: false });
+    if (!project.tracks.some((t) => t.kind === 'midi')) {
+      this.toast('Nothing to export: the project has no MIDI tracks.');
+      return;
+    }
+    const startBeat = range === 'loop' ? project.loop.start : 0;
+    const endBeat = range === 'loop' ? project.loop.end : projectEndBeat(project);
+    if (endBeat <= startBeat) {
+      this.toast('Nothing to export: the project has no clips.');
+      return;
+    }
+    const safeName = (project.name.trim() || 'Untitled').replace(/[\\/:*?"<>|]/g, '_');
+    try {
+      const bytes = exportMidiFile(project, { startBeat, endBeat });
+      const result = await saveBytes(bytes, { suggestedName: `${safeName}.mid`, mime: MIDI_MIME, extension: '.mid', description: 'MIDI file' });
+      if (result) this.toast(`Exported ${result.name}`, 'info');
+    } catch (e) {
+      if (!isAbortError(e)) this.toast(`MIDI export failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // -------------------------------------------------------------------------

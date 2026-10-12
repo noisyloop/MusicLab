@@ -149,6 +149,8 @@ export function Toolbar() {
         <button onClick={() => void app.saveProject()} title="Save project (Ctrl+S)">Save</button>
         <button onClick={() => void app.saveProject(true)} title="Save as… (Ctrl+Shift+S)">Save As</button>
         <button onClick={() => app.setExportOpen(true)} title="Export mix to WAV (Ctrl+Shift+E)">Export WAV</button>
+        <button onClick={() => void app.openMidiImport()} title="Import a Standard MIDI File (.mid) at the playhead" data-testid="import-midi">Import MIDI</button>
+        <button onClick={() => app.setMidiExportOpen(true)} title="Export MIDI tracks to a Standard MIDI File (.mid)" data-testid="export-midi">Export MIDI</button>
       </div>
       <div className="group">
         <button onClick={() => app.undo()} disabled={!canUndo} title={undoLabel ? `Undo ${undoLabel} (Ctrl+Z)` : 'Undo (Ctrl+Z)'}>
