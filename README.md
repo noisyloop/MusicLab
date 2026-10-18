@@ -62,6 +62,13 @@ are saved to your own disk as a single `.musiclab` file.
 - Save/Open `.musiclab` files with the File System Access API where the
   browser supports it, and download / file input everywhere else. The page
   warns before you leave with unsaved changes.
+- Autosave and crash recovery: while a project has unsaved changes, it is
+  copied into the browser's IndexedDB about a second after each edit, and
+  again when the tab is hidden. If the tab closes or crashes before you save,
+  the next time you open MusicLab a banner offers to **Restore** that work
+  (audio included) or **Discard** it. The copy stays on your machine and is
+  deleted once the project is saved or otherwise has no unsaved changes.
+  Restored work is still unsaved, so save it to a file to keep it.
 - Export the mix (whole song or loop region) to 16-bit or 32-bit-float WAV.
   The render uses an OfflineAudioContext and the same engine code as live
   playback.
@@ -271,11 +278,15 @@ cover:
   signal must continue after the last note ends, and must stop when the
   delay is bypassed. This flow also covers the FX badge, drag-reordering,
   live compressor gain reduction, and the master chain.
+- autosave: closing a tab with unsaved audio and MIDI, restoring it in a new
+  tab, discarding, and checking that an open tab's work isn't offered to
+  another tab
 
-They are not part of `npm test` and need extra tools:
+They are not part of `npm test` (CI runs them in a separate job) and need
+extra tools:
 
 ```sh
-npm i --no-save playwright-core
+npm i --no-save playwright-core@1.56.1
 npx playwright-core install chromium   # or set CHROMIUM_PATH to an existing Chromium
 e2e/make-fixtures.sh /tmp/ml           # needs ffmpeg
 npm run dev &                          # in another terminal
@@ -284,7 +295,11 @@ node e2e/editing.mjs /tmp/ml
 node e2e/offline-render.mjs /tmp/ml
 node e2e/midi.mjs /tmp/ml
 node e2e/effects.mjs /tmp/ml
+node e2e/autosave.mjs /tmp/ml
 ```
+
+Each script takes the app URL as an optional second argument (default
+`http://localhost:5173/`), so you can also point them at `npm run preview`.
 
 ## License
 

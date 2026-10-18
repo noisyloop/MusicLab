@@ -4,6 +4,7 @@ import { installKeyboard } from '../app/keyboard';
 import { PROJECT_EXTENSION } from '../persistence/projectFile';
 import { BottomPanel } from './BottomPanel';
 import { ExportDialog, MidiExportDialog } from './ExportDialog';
+import { RecoveryBanner } from './RecoveryBanner';
 import { Timeline } from './Timeline';
 import { Toasts } from './Toasts';
 import { Toolbar } from './Toolbar';
@@ -18,6 +19,14 @@ export function App() {
     };
     window.addEventListener('pointerdown', startAudio, { capture: true, once: true });
     window.addEventListener('keydown', startAudio, { capture: true, once: true });
+
+    void app.initAutosave();
+    // Write unsaved changes before the tab is hidden, closed or discarded.
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') app.flushAutosave();
+    };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onHide);
 
     const beforeUnload = (e: BeforeUnloadEvent) => {
       if (!app.state.dirty) return;
@@ -44,6 +53,8 @@ export function App() {
       uninstall();
       window.removeEventListener('pointerdown', startAudio, { capture: true });
       window.removeEventListener('keydown', startAudio, { capture: true });
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onHide);
       window.removeEventListener('beforeunload', beforeUnload);
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
@@ -60,6 +71,7 @@ export function App() {
       <BottomPanel />
       <ExportDialog />
       <MidiExportDialog />
+      <RecoveryBanner />
       <Toasts />
     </div>
   );
