@@ -44,7 +44,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
-          npm i --no-save playwright-core@1.56.1
+          npm i --no-save playwright-core@1.64.1
           npx playwright-core install --with-deps chromium
       - name: Make fixtures
         run: e2e/make-fixtures.sh "$WORK"

@@ -742,7 +742,7 @@ export class AppController {
       this.toast('Nothing to export: the project has no clips.');
       return;
     }
-    let sampleRate = 44100;
+    let sampleRate: number;
     try {
       sampleRate = (await this.ensureEngine()).ctx.sampleRate;
     } catch {

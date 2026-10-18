@@ -4,8 +4,9 @@ Where the brief left a choice open, I picked the simplest option that meets
 the constraints. Each one is listed here.
 
 ## Stack & tooling
-- **React 18, Vite 6, Vitest 3, TypeScript 5.7, ESLint 9.** These are proven
-  versions I could verify, not the newest majors. TypeScript runs with
+- **React 19, Vite 8, Vitest 5, TypeScript 6.0, ESLint 10.** TypeScript stays
+  on 6.0 because typescript-eslint does not support 7 yet. Dependabot opens
+  weekly update PRs for npm packages and GitHub Actions. TypeScript runs with
   `strict`, `noUncheckedIndexedAccess`, and unused-code checks. ESLint
   forbids `any`. The codebase has no `any`; the few `as unknown as` casts each
   carry a comment explaining why.
