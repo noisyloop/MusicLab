@@ -702,7 +702,12 @@ input[type='range'] {
   background: #3a3e46;
 }
 .param select {
-  max-width: 90px;
+  max-width: 120px;
+}
+/* Long option labels (FMSynth's algorithms) need more than one knob's width. */
+.param:has(select) {
+  width: auto;
+  min-width: 78px;
 }
 .gr-meter {
   display: flex;

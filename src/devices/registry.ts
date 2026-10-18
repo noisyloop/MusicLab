@@ -6,10 +6,12 @@ import { eq3Definition } from './effects/eq3/definition';
 import { filterDefinition } from './effects/filter/definition';
 import { reverbDefinition } from './effects/reverb/definition';
 import { saturatorDefinition } from './effects/saturator/definition';
+import { fmsynthDefinition } from './fmsynth/definition';
 import { subsynthDefinition } from './subsynth/definition';
 
 const definitions: Record<string, DeviceDefinition> = {
   [subsynthDefinition.type]: subsynthDefinition,
+  [fmsynthDefinition.type]: fmsynthDefinition,
   [drumkitDefinition.type]: drumkitDefinition,
 };
 

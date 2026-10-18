@@ -11,10 +11,12 @@ import eq3ProcessorUrl from '../devices/effects/eq3/processor.ts?worker&url';
 import filterProcessorUrl from '../devices/effects/filter/processor.ts?worker&url';
 import reverbProcessorUrl from '../devices/effects/reverb/processor.ts?worker&url';
 import saturatorProcessorUrl from '../devices/effects/saturator/processor.ts?worker&url';
+import fmsynthProcessorUrl from '../devices/fmsynth/processor.ts?worker&url';
 import subsynthProcessorUrl from '../devices/subsynth/processor.ts?worker&url';
 
 const processorUrls: Record<string, string> = {
   subsynth: subsynthProcessorUrl,
+  fmsynth: fmsynthProcessorUrl,
   drumkit: drumkitProcessorUrl,
   eq3: eq3ProcessorUrl,
   compressor: compressorProcessorUrl,

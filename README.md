@@ -42,11 +42,15 @@ are saved to your own disk as a single `.musiclab` file.
   export lengthens its tail to fit them, up to 10 s.
 - Track header: ⧉ duplicates a track along with its clips and effects.
 - MIDI: piano roll (draw, move, resize, delete notes, edit velocity, transpose,
-  read-only pitch-bend curve), plus two built-in instruments running in
+  read-only pitch-bend curve), plus three built-in instruments running in
   AudioWorklets, with their parameters in the Device panel:
   - **SubSynth**, a polyphonic subtractive synth. It follows pitch bend (with
     a Bend Range parameter) and moves its filter cutoff with CC 1, CC 74,
     and a configurable Filter CC.
+  - **FMSynth**, a 4-operator FM synth with eight algorithms, operator 4
+    feedback, and a ratio, level, and ADSR per operator. It defaults to an
+    electric piano. Velocity and CC 1, CC 74, and a configurable Bright CC
+    control brightness, and it follows pitch bend.
   - **DrumKit**, a synthesized General MIDI drum kit (kick, snare, closed and
     open hats, cymbals, toms, rim, clap, and blips for the other percussion
     notes), with a Level and Tune knob per voice group.
@@ -180,7 +184,7 @@ pass through `migrate()`.
 ```
 src/model/        plain-data project model, commands (every edit), undo history, validation
 src/engine/       Web Audio engine: scheduler math, AudioEngine (live + offline), WorkletDevice host
-src/devices/      Device interface, shared worklet processor hosts, SubSynth and DrumKit, effects/ (six insert effects)
+src/devices/      Device interface, shared worklet processor hosts, SubSynth, FMSynth, DrumKit, effects/ (six insert effects)
 src/midi/         Standard MIDI File parser/writer (smf.ts), SMF -> model import, project -> SMF export
 src/persistence/  .musiclab read/write (fflate)
 src/app/          controller (intents, file IO, engine lifecycle), stores, keyboard
@@ -212,7 +216,7 @@ src/util/         WAV encoder, waveform peaks
   I/O) plus an AudioWorklet processor that speaks a small message protocol:
   timed `noteOn`/`noteOff`/`allNotesOff`/`pitchBend`/`cc` events, `params`,
   and `reset`. Events known in advance (offline render) arrive through
-  `processorOptions`. Both instruments share one processor host
+  `processorOptions`. All instruments share one processor host
   (`src/devices/processorHost.ts`). It applies each event at its exact sample
   frame and drives a pure-TypeScript `InstrumentCore`. Effects
   (`kind: 'effect'`, one stereo input) work the same way:
@@ -241,6 +245,10 @@ src/util/         WAV encoder, waveform peaks
 - beat/second and tick/beat conversion
 - the scheduler's clip-window, loop, and bend/CC chasing math
 - the SubSynth DSP, including pitch bend and CC filter mapping
+- the FMSynth DSP: every algorithm's wiring, operator ratios, octave and
+  pitch bend, modulation and feedback harmonics, velocity and CC
+  brightness, alias muting, and bit-identical output whatever the
+  render-quantum splits
 - the DrumKit DSP, which must render bit-identically whatever the
   render-quantum splits
 - the SMF parser: formats 0 and 1, running status, note-on with velocity 0,
@@ -284,6 +292,9 @@ cover:
 - autosave: closing a tab with unsaved audio and MIDI, restoring it in a new
   tab, discarding, and checking that an open tab's work isn't offered to
   another tab
+- FMSynth: picking it in the Device panel, live playback, a WAV export
+  checked for signal and for silence after the release, save → open, and
+  undoing an instrument change
 
 They are not part of `npm test` (CI runs them in a separate job) and need
 extra tools:
@@ -299,6 +310,7 @@ node e2e/offline-render.mjs /tmp/ml
 node e2e/midi.mjs /tmp/ml
 node e2e/effects.mjs /tmp/ml
 node e2e/autosave.mjs /tmp/ml
+node e2e/fmsynth.mjs /tmp/ml
 ```
 
 Each script takes the app URL as an optional second argument (default
