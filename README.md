@@ -97,6 +97,9 @@ npm run check      # all of the above
 npm run preview    # serve dist/ locally
 ```
 
+CI (`.github/workflows/ci.yml`) runs `npm run check` and the browser smoke
+tests below on every pull request and every push to `main`.
+
 ## Deploy
 
 `npm run build` produces a fully static `dist/` folder. Assets use relative
