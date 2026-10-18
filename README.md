@@ -75,7 +75,7 @@ are saved to your own disk as a single `.musiclab` file.
 
 ## Run
 
-Requires Node.js 18+ (developed with Node 22).
+Requires Node.js 22.12+ (developed with Node 22).
 
 ```sh
 npm install
@@ -289,7 +289,7 @@ They are not part of `npm test` (CI runs them in a separate job) and need
 extra tools:
 
 ```sh
-npm i --no-save playwright-core@1.56.1
+npm i --no-save playwright-core@1.64.1
 npx playwright-core install chromium   # or set CHROMIUM_PATH to an existing Chromium
 e2e/make-fixtures.sh /tmp/ml           # needs ffmpeg
 npm run dev &                          # in another terminal

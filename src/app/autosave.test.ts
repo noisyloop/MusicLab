@@ -1,5 +1,5 @@
 import { IDBFactory } from 'fake-indexeddb';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { setTempo } from '../model/commands';
 import { History } from '../model/history';
 import { fixture } from '../model/testUtil';
@@ -54,7 +54,7 @@ describe('Autosaver', () => {
   let t = 0;
   let dirty: Project | null;
   let db: { write: ReturnType<typeof vi.fn>; deleteSession: ReturnType<typeof vi.fn> };
-  let onError: ReturnType<typeof vi.fn>;
+  let onError: Mock<(e: unknown) => void>;
   let saver: Autosaver;
 
   beforeEach(() => {

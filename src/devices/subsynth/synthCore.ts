@@ -300,7 +300,6 @@ export class SynthCore implements InstrumentCore {
       const dt1 = Math.min(0.5, base / detuneRatio / sr);
       const dt2 = Math.min(0.5, (base * detuneRatio) / sr);
       const velGain = level * (1 - p.velSens + p.velSens * v.velocity);
-      let g = 0;
       let a1 = 0;
       let a2 = 0;
       let a3 = 0;
@@ -308,7 +307,7 @@ export class SynthCore implements InstrumentCore {
         if ((i - from) % FILTER_BLOCK === 0) {
           const fe = v.fenv.level;
           const fc = Math.min(nyq, Math.max(20, cutoff * Math.pow(2, p.envAmount * 7 * fe)));
-          g = Math.tan((Math.PI * fc) / sr);
+          const g = Math.tan((Math.PI * fc) / sr);
           a1 = 1 / (1 + g * (g + k));
           a2 = g * a1;
           a3 = g * a2;

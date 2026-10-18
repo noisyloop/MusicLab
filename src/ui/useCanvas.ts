@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MutableRefObject, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 
 export interface CanvasSize {
   width: number;
@@ -13,15 +13,17 @@ export interface CanvasSize {
 export function useCanvas(
   draw: (ctx: CanvasRenderingContext2D, size: CanvasSize) => void,
   subscribe: (invalidate: () => void) => () => void,
-): { canvasRef: RefObject<HTMLCanvasElement>; sizeRef: MutableRefObject<CanvasSize>; invalidate: () => void } {
+): { canvasRef: RefObject<HTMLCanvasElement | null>; sizeRef: RefObject<CanvasSize>; invalidate: () => void } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sizeRef = useRef<CanvasSize>({ width: 0, height: 0 });
   const dirty = useRef(true);
   const drawRef = useRef(draw);
-  drawRef.current = draw;
-  const invalidate = useRef(() => {
+  useLayoutEffect(() => {
+    drawRef.current = draw;
+  });
+  const invalidate = useCallback(() => {
     dirty.current = true;
-  }).current;
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;

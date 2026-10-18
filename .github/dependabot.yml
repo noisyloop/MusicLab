@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Minor and patch bumps land as one PR; majors get their own.
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # typescript-eslint supports TypeScript only below 6.1.
+      - dependency-name: typescript
+        versions: ['>=6.1']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
