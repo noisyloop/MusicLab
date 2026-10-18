@@ -592,6 +592,25 @@ input[type='range'] {
 .toast.error {
   border-left-color: var(--danger);
 }
+.recovery {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 24px);
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #33373f;
+  border-left: 4px solid var(--accent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  z-index: 30;
+}
+.recovery > span {
+  flex: 1;
+}
 .toast span {
   flex: 1;
 }

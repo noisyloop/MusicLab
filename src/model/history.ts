@@ -22,7 +22,8 @@ export class History {
   private past: Entry[] = [];
   private future: Entry[] = [];
   private current: Project;
-  private saved: Project;
+  /** The state last written to a file; null when no state has been. */
+  private saved: Project | null;
   private mergeOpen = true;
 
   constructor(initial: Project, private now: () => number = () => Date.now()) {
@@ -90,12 +91,12 @@ export class History {
     return this.future[this.future.length - 1]?.label;
   }
 
-  /** Replace everything (new/opened project). */
-  reset(project: Project): void {
+  /** Replace everything (new/opened project). `saved: false` starts it dirty (a recovered autosave). */
+  reset(project: Project, saved = true): void {
     this.past = [];
     this.future = [];
     this.current = project;
-    this.saved = project;
+    this.saved = saved ? project : null;
   }
 
   markSaved(): void {

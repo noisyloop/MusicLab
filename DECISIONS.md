@@ -321,3 +321,23 @@ the constraints. Each one is listed here.
 - **Save without File System Access** downloads `<project name>.musiclab`, so
   a later "Save" downloads again. With File System Access, Save writes back to
   the same file handle.
+- **Autosave goes to IndexedDB, not to the file.** Writing back to the
+  user's file without asking would make Save meaningless, and most browsers
+  can't write to it anyway. So only unsaved work is autosaved, and only for
+  recovery. A copy is written 1 s after the last edit (at most 5 s after the
+  first one, so a long fader drag still gets saved) and when the tab is
+  hidden. It is deleted when the project has no unsaved changes, including
+  after an undo back to the saved state.
+- **One autosave per tab.** Each tab writes under its own session id, so two
+  tabs never overwrite each other. Each tab holds a Web Lock named after its
+  id, and on startup only copies from tabs that are no longer open are
+  offered, newest first. Without Web Locks, every other tab's copy is offered.
+- **Audio is stored once.** Audio bytes go in a separate store keyed by asset
+  id and are written only when missing. The project JSON is rewritten on
+  every autosave. Assets no autosave references are deleted along with the
+  last one that did.
+- **A restored project is unsaved.** It has no file handle and no undo
+  history, and it shows the unsaved dot until you save it. Restoring
+  replaces the current project (after the usual confirmation if that has
+  unsaved changes). If autosave writes fail (for example, the storage quota
+  is full), one error toast appears, and no more until a write succeeds.

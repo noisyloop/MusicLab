@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck, lint, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  e2e:
+    name: Browser smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_URL: http://localhost:4173/
+    steps:
+      - run: echo "WORK=$RUNNER_TEMP/e2e" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install ffmpeg, Playwright and Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          npm i --no-save playwright-core@1.56.1
+          npx playwright-core install --with-deps chromium
+      - name: Make fixtures
+        run: e2e/make-fixtures.sh "$WORK"
+      - name: Build and serve
+        run: |
+          npm run build
+          npx vite preview --port 4173 --strictPort &
+          for i in $(seq 1 60); do curl -sf "$APP_URL" > /dev/null && exit 0; sleep 1; done
+          echo "preview server did not start" >&2
+          exit 1
+      - name: Run smoke tests
+        run: |
+          status=0
+          for t in flows editing offline-render midi effects autosave; do
+            echo "::group::$t"
+            node "e2e/$t.mjs" "$WORK" "$APP_URL" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+      - name: Upload screenshots and renders
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-output
+          path: ${{ runner.temp }}/e2e
+          if-no-files-found: ignore

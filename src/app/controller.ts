@@ -13,12 +13,15 @@ import { History } from '../model/history';
 import { newId } from '../model/ids';
 import { createProject, createTrack, findClip, findTrack, nextTrackColor, nextTrackName, projectEndBeat, TRACK_COLORS } from '../model/project';
 import { secondsToBeats, snapBeat } from '../model/time';
+import { parseProject } from '../model/validate';
 import { MASTER_CHAIN, type AudioAsset, type AudioClip, type Clip, type Id, type MidiClip, type Project, type Track } from '../model/types';
+import { AutosaveDb, type AutosaveRecord } from '../persistence/autosaveDb';
 import { PROJECT_EXTENSION, PROJECT_MIME, readProjectFile, writeProjectFile } from '../persistence/projectFile';
 import { exportMidiFile } from '../midi/export';
 import { planMidiImport, readMidiFile } from '../midi/import';
 import { encodeWav, type WavFormat } from '../util/wav';
 import { AssetStore } from './assets';
+import { Autosaver, holdSessionLock, liveSessionIds, pickRecoverable } from './autosave';
 import { isAbortError, openFile, saveBytes } from './fileAccess';
 import { Store } from './store';
 
@@ -29,6 +32,14 @@ export interface Toast {
   id: number;
   kind: 'error' | 'info';
   message: string;
+}
+
+/** An autosaved copy of unsaved work from a tab that is no longer open. */
+export interface Recovery {
+  sessionId: string;
+  projectName: string;
+  fileName: string | null;
+  savedAt: number;
 }
 
 export interface ViewState {
@@ -67,6 +78,7 @@ export interface AppState {
   busy: string | null;
   exportOpen: boolean;
   midiExportOpen: boolean;
+  recovery: Recovery | null;
 }
 
 export const TRACK_HEIGHT = 64;
@@ -121,6 +133,9 @@ export class AppController {
   private toastId = 0;
   private rafId = 0;
   private stoppedPosition = 0;
+  private autosaveInit: Promise<void> | null = null;
+  private autosaveDb: AutosaveDb | null = null;
+  private autosaver: Autosaver | null = null;
 
   constructor() {
     const project = createProject('Untitled');
@@ -148,6 +163,7 @@ export class AppController {
       busy: null,
       exportOpen: false,
       midiExportOpen: false,
+      recovery: null,
     });
     this.startAnimationLoop();
   }
@@ -183,6 +199,7 @@ export class AppController {
       editorClipId: editorClip?.clip.kind === 'midi' ? s.editorClipId : null,
     });
     this.engine?.setProject(project);
+    this.autosaver?.changed();
   }
 
   execute(cmd: Command): boolean {
@@ -600,9 +617,9 @@ export class AppController {
     return !this.history.isDirty || window.confirm('You have unsaved changes. Discard them?');
   }
 
-  private loadProject(project: Project, fileName: string | null): void {
+  private loadProject(project: Project, fileName: string | null, saved = true): void {
     this.engine?.stop();
-    this.history.reset(project);
+    this.history.reset(project, saved);
     this.fileHandle = null;
     this.stoppedPosition = 0;
     this.position.set({ beat: 0 });
@@ -643,23 +660,7 @@ export class AppController {
     this.store.set({ busy: `Opening ${file.name}…` });
     try {
       const bundle = readProjectFile(new Uint8Array(await file.arrayBuffer()));
-      const engine = await this.ensureEngine();
-      const fresh = new AssetStore();
-      for (const asset of Object.values(bundle.project.assets)) {
-        const bytes = bundle.audio.get(asset.id)!;
-        let buffer: AudioBuffer;
-        try {
-          buffer = await engine.ctx.decodeAudioData(bytes.slice().buffer);
-        } catch {
-          throw new Error(`Could not decode embedded audio "${asset.fileName}".`);
-        }
-        fresh.add(asset.id, bytes, buffer);
-      }
-      this.assets.clear();
-      for (const asset of Object.values(bundle.project.assets)) {
-        const a = fresh.get(asset.id)!;
-        this.assets.add(asset.id, a.bytes, a.buffer);
-      }
+      await this.replaceAssets(bundle.project, bundle.audio);
       this.loadProject(bundle.project, file.name);
       this.fileHandle = handle;
       this.toast(`Opened ${file.name}`, 'info');
@@ -667,6 +668,31 @@ export class AppController {
       this.toast(`Could not open "${file.name}": ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       this.store.set({ busy: null });
+    }
+  }
+
+  /**
+   * Decode every asset of `project` from `audio` and swap them in for the
+   * current assets. Throws (leaving the current assets alone) if any fails.
+   */
+  private async replaceAssets(project: Project, audio: Map<Id, Uint8Array>): Promise<void> {
+    const engine = await this.ensureEngine();
+    const fresh = new AssetStore();
+    for (const asset of Object.values(project.assets)) {
+      const bytes = audio.get(asset.id);
+      if (!bytes) throw new Error(`Audio for "${asset.fileName}" is missing.`);
+      let buffer: AudioBuffer;
+      try {
+        buffer = await engine.ctx.decodeAudioData(bytes.slice().buffer);
+      } catch {
+        throw new Error(`Could not decode embedded audio "${asset.fileName}".`);
+      }
+      fresh.add(asset.id, bytes, buffer);
+    }
+    this.assets.clear();
+    for (const asset of Object.values(project.assets)) {
+      const a = fresh.get(asset.id)!;
+      this.assets.add(asset.id, a.bytes, a.buffer);
     }
   }
 
@@ -693,6 +719,7 @@ export class AppController {
       // Only mark saved if nothing changed while we were writing.
       if (this.history.project === project) this.history.markSaved();
       this.store.set({ fileName: result.name, dirty: this.history.isDirty });
+      this.autosaver?.changed();
       this.toast(`Saved ${result.name}`, 'info');
     } catch (e) {
       if (isAbortError(e)) return;
@@ -735,6 +762,95 @@ export class AppController {
     } finally {
       this.store.set({ busy: null });
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // autosave & crash recovery
+
+  /** Open the autosave database and look for unsaved work left by a closed tab. */
+  initAutosave(): Promise<void> {
+    this.autosaveInit ??= this.startAutosave();
+    return this.autosaveInit;
+  }
+
+  private async startAutosave(): Promise<void> {
+    if (typeof indexedDB === 'undefined') return;
+    let db: AutosaveDb;
+    try {
+      db = await AutosaveDb.open();
+    } catch {
+      return; // e.g. storage disabled: run without autosave
+    }
+    this.autosaveDb = db;
+    const sessionId = newId('s');
+    holdSessionLock(sessionId);
+    this.autosaver = new Autosaver(
+      db,
+      sessionId,
+      () => (this.history.isDirty ? { project: this.project, fileName: this.state.fileName } : null),
+      (id) => this.assets.get(id)?.bytes,
+      (e) => this.toast(`Autosave failed: ${e instanceof Error ? e.message : String(e)}. Save your project to a file.`),
+    );
+    this.autosaver.changed();
+    await this.findRecovery();
+  }
+
+  /** Write unsaved changes now (the page is being hidden or closed). */
+  flushAutosave(): void {
+    void this.autosaver?.flush();
+  }
+
+  private async findRecovery(): Promise<void> {
+    const db = this.autosaveDb;
+    if (!db || !this.autosaver) return;
+    let record: AutosaveRecord | undefined;
+    try {
+      record = pickRecoverable(await db.sessions(), await liveSessionIds(this.autosaver.sessionId));
+    } catch {
+      record = undefined;
+    }
+    this.store.set({
+      recovery: record
+        ? { sessionId: record.sessionId, projectName: record.project?.name ?? 'Untitled', fileName: record.fileName, savedAt: record.savedAt }
+        : null,
+    });
+  }
+
+  /** Load the offered autosave as the current (unsaved) project. */
+  async restoreRecovery(): Promise<void> {
+    const rec = this.state.recovery;
+    const db = this.autosaveDb;
+    if (!rec || !db || !this.confirmDiscard()) return;
+    this.store.set({ busy: 'Restoring unsaved work…' });
+    try {
+      const record = await db.session(rec.sessionId);
+      if (!record) throw new Error('it is no longer available');
+      const project = parseProject(record.project);
+      await this.replaceAssets(project, await db.assets(Object.keys(project.assets)));
+      this.loadProject(project, record.fileName, false);
+      // This tab now owns the work: write it under this tab's id, then drop the old copy.
+      await this.autosaver?.flush();
+      await db.deleteSession(rec.sessionId);
+      this.toast(`Restored unsaved work on "${project.name}". Save it to keep it.`, 'info');
+      await this.findRecovery();
+    } catch (e) {
+      this.toast(`Could not restore unsaved work: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      this.store.set({ busy: null });
+    }
+  }
+
+  /** Delete the offered autosave. */
+  async discardRecovery(): Promise<void> {
+    const rec = this.state.recovery;
+    if (!rec || !this.autosaveDb) return;
+    this.store.set({ recovery: null });
+    try {
+      await this.autosaveDb.deleteSession(rec.sessionId);
+    } catch {
+      // Leave it; it will be offered again next time.
+    }
+    await this.findRecovery();
   }
 
   dispose(): void {
