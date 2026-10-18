@@ -19,6 +19,7 @@ function formatValue(p: ContinuousParam, v: number): string {
   if (unit === 'oct') return `${v.toFixed(2)} oct`;
   if (unit === 'st') return p.min < 0 ? `${v > 0 ? '+' : ''}${(Math.round(v * 10) / 10).toString()} st` : `±${Math.round(v)} st`;
   if (unit === 'cc') return `CC ${Math.round(v)}`;
+  if (unit === '×') return `${Number(v.toFixed(2))}×`;
   if (p.id === 'octave') return `${v > 0 ? '+' : ''}${Math.round(v)}`;
   return `${Math.round(v * 100)}%`;
 }

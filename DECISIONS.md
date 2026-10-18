@@ -88,6 +88,36 @@ the constraints. Each one is listed here.
   sensitivity and output gain.
 - The DSP is a plain TypeScript class (`synthCore.ts`), so it is unit-tested
   in Node and bundled into the worklet by Vite (`?worker&url`).
+- The ADSR envelope lives in `src/devices/envelope.ts`, shared with FMSynth.
+
+## FM synth (FMSynth)
+- **Four sine operators, eight algorithms.** The algorithms follow the
+  classic 4-operator layouts, from a single 4→3→2→1 stack to four carriers
+  (additive). Only operator 4 has feedback, averaged over its last two
+  samples to keep it stable. Each operator has a ratio (0.5–16 in steps of
+  0.5, so integer and half ratios are easy to hit), a level, and an ADSR.
+  For a modulator, Level sets the modulation index: 6 radians at Level 1
+  with the controllers at rest, and up to 3× that with them.
+- **Defaults are an electric piano** (algorithm 5): a 1:1 pair for the body
+  and a 1:14 pair for the tine's attack. Choosing FMSynth sounds useful
+  right away. There are no presets yet, because a preset that sets many
+  params at once doesn't fit the one-param-per-command model.
+- **Velocity → brightness.** Vel→Mod scales every modulator by velocity, so
+  harder notes are brighter, separately from Vel Sens (loudness). CC 1,
+  CC 74, and a configurable Bright CC (default 20) scale the modulators the
+  same way the SubSynth CCs move its cutoff. They add up from 1, capped at
+  3, and CC 74 at 0 gives pure sines.
+- **Carrier levels are divided by the number of carriers**, so switching
+  algorithms doesn't make the patch jump in level.
+- **Aliasing.** An operator whose frequency reaches 0.45 × the sample rate
+  is muted, not aliased. This only happens with high ratios on very high
+  notes.
+- **Cost.** A 4096-point interpolated sine table (error < 1e-6) is faster
+  than `Math.sin`. The operator loop is unrolled: every algorithm's
+  modulators have higher numbers than their targets, so one straight-line
+  pass computes all eight. 16 voices take about 8% of one core, roughly 3×
+  SubSynth. Every value is computed per sample, so output is bit-identical
+  however rendering is split, and a unit test checks this.
 
 ## Synth & drums: MIDI expression
 - **SubSynth Bend Range (default ±12)** is the furthest the synth will bend.
@@ -127,12 +157,14 @@ the constraints. Each one is listed here.
   advances per sample. The same events therefore render bit-identically in
   live playback and WAV export, whatever the render-quantum boundaries; a
   unit test checks this.
-- **Shared processor host.** Both instruments use one AudioWorklet processor
+- **Shared processor host.** All instruments use one AudioWorklet processor
   (`processorHost.ts`) that drives an `InstrumentCore`. Each device still
   has its own module and processor name.
 - **Instrument picker.** The Device panel has a selector to switch a MIDI
-  track between SubSynth and DrumKit (an undoable command). This wasn't
-  asked for, but without it a drum track couldn't be made by hand.
+  track between SubSynth, FMSynth, and DrumKit (an undoable command). This
+  wasn't asked for, but without it a drum track couldn't be made by hand.
+  Switching starts the new instrument from its defaults. New MIDI tracks
+  and imported MIDI files still get SubSynth (DrumKit on channel 10).
 
 ## Insert effects
 - **Model.** Each track has an `effects` list, and the master chain lives at
